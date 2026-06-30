@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import type { GenerativeUIComponent } from '@/core/types';
 import { STYLE_PRESETS, TARGET_PLATFORMS } from '@/core/config';
 import * as LucideIcons from 'lucide-react';
@@ -9,12 +10,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { useProjectStore } from '@/features/project/store';
 import { useWorkflowStore } from '@/features/workflow/store';
-import type { StylePreset, TargetPlatform, VideoBrief, Scene, HookOption, DirectorReview } from '@/core/types';
+import type { StylePreset, TargetPlatform, VideoBrief, Scene, HookOption, DirectorReview, AspectRatio } from '@/core/types';
 
 export function renderGenerativeUI(gui: GenerativeUIComponent, key: number): React.ReactNode {
   switch (gui.type) {
     case 'style_selector': return <StyleSelector key={key} options={gui.data.options} />;
     case 'platform_selector': return <PlatformSelector key={key} options={gui.data.options} />;
+    case 'aspect_ratio_selector': return <AspectRatioSelector key={key} options={gui.data.options} selected={gui.data.selected} />;
+    case 'duration_selector': return <DurationSelector key={key} options={gui.data.options} selected={gui.data.selected} />;
+    case 'resolution_selector': return <ResolutionSelector key={key} options={gui.data.options} selected={gui.data.selected} />;
+    case 'fps_selector': return <FpsSelector key={key} options={gui.data.options} selected={gui.data.selected} />;
     case 'video_brief_form': return <VideoBriefForm key={key} data={gui.data} />;
     case 'scene_suggestion': return <SceneSuggestionCards key={key} scenes={gui.data} />;
     case 'hook_suggestions': return <HookSuggestions key={key} hooks={gui.data.hooks} />;
@@ -87,6 +92,153 @@ function PlatformSelector({ options }: { options: TargetPlatform[] }) {
   );
 }
 
+function AspectRatioSelector({ options, selected }: { options: AspectRatio[]; selected?: AspectRatio }) {
+  const { updateCurrentProject, getCurrentProject } = useProjectStore();
+  const project = getCurrentProject();
+  const current = selected || project?.settings.aspectRatio;
+
+  const previews: Record<AspectRatio, { w: number; h: number; label: string }> = {
+    '9:16': { w: 18, h: 32, label: 'Vertical' },
+    '1:1': { w: 28, h: 28, label: 'Square' },
+    '16:9': { w: 32, h: 18, label: 'Widescreen' },
+    '4:5': { w: 24, h: 30, label: 'Portrait' },
+    'custom': { w: 30, h: 20, label: 'Custom' },
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">🖼️ Aspect Ratio</div>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        {options.map((ratio) => {
+          const p = previews[ratio];
+          const isActive = current === ratio;
+          return (
+            <button
+              key={ratio}
+              onClick={() => {
+                updateCurrentProject({
+                  settings: { ...project!.settings, aspectRatio: ratio },
+                });
+              }}
+              className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border text-xs transition-all ${
+                isActive
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border hover:border-primary/40'
+              }`}
+            >
+              <div className="h-9 flex items-center justify-center">
+                <div
+                  className={`rounded-sm border-2 ${isActive ? 'border-primary' : 'border-muted-foreground/40'}`}
+                  style={{ width: p.w, height: p.h }}
+                />
+              </div>
+              <div className="font-medium">{ratio}</div>
+              <div className="text-[10px] text-muted-foreground">{p.label}</div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DurationSelector({ options, selected }: { options: { id: string; label: string; seconds: number }[]; selected?: string }) {
+  const { updateCurrentProject, getCurrentProject } = useProjectStore();
+  const project = getCurrentProject();
+  const activeId = selected || (project?.videoBrief?.duration ? `d-${project.videoBrief.duration}` : undefined);
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">⏱️ Length</div>
+      <div className="flex flex-wrap gap-2">
+        {options.map((opt) => {
+          const isActive = activeId === opt.id;
+          return (
+            <button
+              key={opt.id}
+              onClick={() => {
+                updateCurrentProject({
+                  videoBrief: { ...project!.videoBrief, duration: opt.seconds } as VideoBrief,
+                });
+              }}
+              className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all ${
+                isActive ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary/40'
+              }`}
+            >
+              {opt.label}
+              <span className="ml-1.5 text-muted-foreground font-normal text-[10px]">{opt.seconds}s</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ResolutionSelector({ options, selected }: { options: string[]; selected?: string }) {
+  const { updateCurrentProject, getCurrentProject } = useProjectStore();
+  const project = getCurrentProject();
+  const current = selected || project?.settings.resolution;
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">🖥️ Resolution</div>
+      <div className="flex flex-wrap gap-2">
+        {options.map((res) => {
+          const isActive = current === res;
+          return (
+            <button
+              key={res}
+              onClick={() => {
+                updateCurrentProject({
+                  settings: { ...project!.settings, resolution: res },
+                });
+              }}
+              className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all ${
+                isActive ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary/40'
+              }`}
+            >
+              {res}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FpsSelector({ options, selected }: { options: number[]; selected?: number }) {
+  const { updateCurrentProject, getCurrentProject } = useProjectStore();
+  const project = getCurrentProject();
+  const current = selected || project?.settings.fps;
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">🎞️ Frame Rate</div>
+      <div className="flex flex-wrap gap-2">
+        {options.map((fps) => {
+          const isActive = current === fps;
+          return (
+            <button
+              key={fps}
+              onClick={() => {
+                updateCurrentProject({
+                  settings: { ...project!.settings, fps },
+                });
+              }}
+              className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all ${
+                isActive ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary/40'
+              }`}
+            >
+              {fps} fps
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function VideoBriefForm({ data }: { data: Partial<VideoBrief> }) {
   const { updateCurrentProject, setPhase, getCurrentProject } = useProjectStore();
   const [brief, setBrief] = useState(data);
@@ -140,8 +292,6 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
     </div>
   );
 }
-
-import { useState } from 'react';
 
 function SceneSuggestionCards({ scenes }: { scenes: Partial<Scene>[] }) {
   const { updateCurrentProject, setPhase } = useProjectStore();

@@ -224,6 +224,10 @@ export type GenerativeUIComponent =
   | { type: 'style_selector'; data: { options: StylePreset[]; selected?: StylePreset } }
   | { type: 'platform_selector'; data: { options: TargetPlatform[]; selected?: TargetPlatform } }
   | { type: 'aspect_ratio_preview'; data: { ratio: AspectRatio } }
+  | { type: 'aspect_ratio_selector'; data: { options: AspectRatio[]; selected?: AspectRatio } }
+  | { type: 'duration_selector'; data: { options: { id: string; label: string; seconds: number }[]; selected?: string } }
+  | { type: 'resolution_selector'; data: { options: string[]; selected?: string } }
+  | { type: 'fps_selector'; data: { options: number[]; selected?: number } }
   | { type: 'character_form'; data: Partial<Character> }
   | { type: 'product_form'; data: Partial<ProductDetails> }
   | { type: 'hook_suggestions'; data: { hooks: string[] } }

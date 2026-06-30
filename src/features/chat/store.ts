@@ -10,7 +10,7 @@ interface ChatState {
   isStreaming: boolean;
 
   loadMessages: (projectId: string) => Promise<void>;
-  addMessage: (projectId: string, role: ChatMessage['role'], content: string, generativeUI?: GenerativeUIComponent[]) => Promise<void>;
+  addMessage: (projectId: string, role: ChatMessage['role'], content: string, generativeUI?: GenerativeUIComponent[], metadata?: Record<string, unknown>) => Promise<void>;
   updateLastAssistantMessage: (content: string) => void;
   setStreaming: (streaming: boolean) => void;
   clearMessages: (projectId: string) => Promise<void>;
@@ -37,7 +37,7 @@ export const useChatStore = create<ChatState>()(
       }
     },
 
-    addMessage: async (projectId, role, content, generativeUI) => {
+    addMessage: async (projectId, role, content, generativeUI, metadata) => {
       const msg: ChatMessage = {
         id: nanoid(),
         projectId,
@@ -45,6 +45,7 @@ export const useChatStore = create<ChatState>()(
         content,
         timestamp: new Date().toISOString(),
         generativeUI,
+        metadata,
       };
       await storage.saveChatMessage(msg);
       set((s) => {
