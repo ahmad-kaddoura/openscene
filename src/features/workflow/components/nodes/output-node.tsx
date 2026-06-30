@@ -1,6 +1,6 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,10 +26,15 @@ function downloadAsset(url: string, filename: string) {
 function OutputNodeComponent({ data }: NodeProps) {
   const final = Boolean((data as { final?: boolean }).final);
   const sceneId = (data as { sceneId?: string }).sceneId;
-  const scenes = useWorkflowStore((s) => s.getScenes());
+  const sceneOrder = useWorkflowStore((s) => s.sceneOrder);
+  const sceneMap = useWorkflowStore((s) => s.sceneMap);
+  const scenes = useMemo(
+    () => sceneOrder.map((id) => sceneMap[id]).filter(Boolean),
+    [sceneOrder, sceneMap],
+  );
   const generateAllScenes = useWorkflowStore((s) => s.generateAllScenes);
   const setPhase = useProjectStore((s) => s.setPhase);
-  const scene = useWorkflowStore((s) => sceneId ? s.sceneMap[sceneId] : undefined);
+  const scene = sceneId ? sceneMap[sceneId] : undefined;
   const clearSceneOutput = useWorkflowStore((s) => s.clearSceneOutput);
   const retrySceneGeneration = useWorkflowStore((s) => s.retrySceneGeneration);
 
