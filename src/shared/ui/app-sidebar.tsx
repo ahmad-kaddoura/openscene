@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose,
 } from '@/components/ui/dialog';
-import { Plus, Search, Film, Settings, Palette, FolderOpen, Trash2, MoreHorizontal, ChevronLeft, Clapperboard, Sparkles, Clock } from 'lucide-react';
+import { Plus, Search, Film, Settings, Palette, FolderOpen, Trash2, MoreHorizontal, Clapperboard, Pencil } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useState } from 'react';
 import { PROJECT_PHASES } from './phase-config';
@@ -36,10 +36,13 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function AppSidebar({ collapsed, onNavigate, activeView }: AppSidebarProps) {
-  const { projects, currentProjectId, createProject, openProject, deleteProject, isLoading } = useProjectStore();
+  const { projects, currentProjectId, createProject, openProject, deleteProject, updateProject, isLoading } = useProjectStore();
   const [search, setSearch] = useState('');
   const [newName, setNewName] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState('');
 
   const filtered = projects.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase())
@@ -54,6 +57,20 @@ export function AppSidebar({ collapsed, onNavigate, activeView }: AppSidebarProp
 
   const handleDelete = async (id: string) => {
     await deleteProject(id);
+  };
+
+  const openRenameDialog = (id: string, currentName: string) => {
+    setRenamingProjectId(id);
+    setRenameName(currentName);
+    setRenameDialogOpen(true);
+  };
+
+  const handleRename = async () => {
+    if (!renamingProjectId || !renameName.trim()) return;
+    await updateProject(renamingProjectId, { name: renameName.trim() });
+    setRenameDialogOpen(false);
+    setRenamingProjectId(null);
+    setRenameName('');
   };
 
   return (
@@ -149,7 +166,7 @@ export function AppSidebar({ collapsed, onNavigate, activeView }: AppSidebarProp
             ))}
           </div>
         ) : (
-          <div className="px-2 py-1">
+          <div className="px-3 py-1">
             {filtered.length === 0 && !isLoading && (
               <div className="text-center py-8 text-xs text-muted-foreground">
                 {search ? 'No matching projects' : 'No projects yet'}
@@ -159,7 +176,7 @@ export function AppSidebar({ collapsed, onNavigate, activeView }: AppSidebarProp
               <div key={project.id}>
                 <div
                   onClick={() => { openProject(project.id); onNavigate('project'); }}
-                  className={`group flex items-center gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer transition-all ${
+                  className={`group relative flex items-center gap-2.5 px-2.5 py-2 pr-8 rounded-lg cursor-pointer transition-all ${
                     currentProjectId === project.id
                       ? 'bg-primary/10 border border-primary/20'
                       : 'hover:bg-muted/50 border border-transparent'
@@ -174,7 +191,7 @@ export function AppSidebar({ collapsed, onNavigate, activeView }: AppSidebarProp
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 font-normal">
                         {PHASE_LABELS[project.currentPhase] || project.currentPhase}
                       </Badge>
-                      <span className="text-[10px] text-muted-foreground">
+                      <span className="text-[10px] text-muted-foreground truncate">
                         {formatDistanceToNow(new Date(project.updatedAt), { addSuffix: true })}
                       </span>
                     </div>
@@ -183,12 +200,18 @@ export function AppSidebar({ collapsed, onNavigate, activeView }: AppSidebarProp
                     <DropdownMenuTrigger asChild>
                       <button
                         onClick={(e) => e.stopPropagation()}
-                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-muted transition-opacity"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-muted transition-opacity"
                       >
                         <MoreHorizontal className="w-3.5 h-3.5" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-40">
+                      <DropdownMenuItem
+                        onClick={(e) => { e.stopPropagation(); openRenameDialog(project.id, project.name); }}
+                      >
+                        <Pencil className="w-3.5 h-3.5 mr-2" />
+                        Rename
+                      </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={(e) => { e.stopPropagation(); handleDelete(project.id); }}
                         className="text-red-400 focus:text-red-400"
@@ -207,7 +230,7 @@ export function AppSidebar({ collapsed, onNavigate, activeView }: AppSidebarProp
 
       {/* Bottom Nav */}
       <Separator />
-      <div className={`p-2 flex ${collapsed ? 'flex-col items-center gap-1' : 'flex-col gap-0.5'}`}>
+      <div className={`px-3 py-2 flex ${collapsed ? 'flex-col items-center gap-1' : 'flex-col gap-0.5'}`}>
         {[
           { id: 'brandkit' as AppView, icon: Palette, label: 'Brand Kits' },
           { id: 'assets' as AppView, icon: FolderOpen, label: 'Assets' },
@@ -237,6 +260,28 @@ export function AppSidebar({ collapsed, onNavigate, activeView }: AppSidebarProp
           </Tooltip>
         ))}
       </div>
+
+      {/* Rename Dialog */}
+      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename Project</DialogTitle>
+          </DialogHeader>
+          <Input
+            placeholder="Project name..."
+            value={renameName}
+            onChange={(e) => setRenameName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+            autoFocus
+          />
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="ghost" size="sm">Cancel</Button>
+            </DialogClose>
+            <Button size="sm" onClick={handleRename} disabled={!renameName.trim()}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
