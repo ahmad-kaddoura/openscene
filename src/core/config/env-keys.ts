@@ -1,3 +1,7 @@
+/** Qwen Cloud Pay-As-You-Go → OpenAI Compatible (home.qwencloud.com/api-keys) */
+export const DEFAULT_QWEN_BASE_URL =
+  'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
+
 export interface EnvKeyGroup {
   id: string;
   label: string;
@@ -14,7 +18,7 @@ export const ENV_KEY_GROUPS: EnvKeyGroup[] = [
     description: 'Powers chat agents — planning, storyboard, hooks, and AI director.',
     apiKey: 'QWEN_API_KEY',
     baseUrl: 'QWEN_BASE_URL',
-    defaultBaseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    defaultBaseUrl: DEFAULT_QWEN_BASE_URL,
   },
   {
     id: 'image',
@@ -22,7 +26,7 @@ export const ENV_KEY_GROUPS: EnvKeyGroup[] = [
     description: 'Used by the image and frame generator agents.',
     apiKey: 'IMAGE_GEN_API_KEY',
     baseUrl: 'IMAGE_GEN_BASE_URL',
-    defaultBaseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    defaultBaseUrl: DEFAULT_QWEN_BASE_URL,
   },
   {
     id: 'video',
@@ -30,7 +34,7 @@ export const ENV_KEY_GROUPS: EnvKeyGroup[] = [
     description: 'Used by scene and video generator agents.',
     apiKey: 'VIDEO_GEN_API_KEY',
     baseUrl: 'VIDEO_GEN_BASE_URL',
-    defaultBaseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    defaultBaseUrl: DEFAULT_QWEN_BASE_URL,
   },
   {
     id: 'tts',
@@ -38,7 +42,7 @@ export const ENV_KEY_GROUPS: EnvKeyGroup[] = [
     description: 'Used by voiceover and caption agents.',
     apiKey: 'TTS_API_KEY',
     baseUrl: 'TTS_BASE_URL',
-    defaultBaseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    defaultBaseUrl: DEFAULT_QWEN_BASE_URL,
   },
 ];
 

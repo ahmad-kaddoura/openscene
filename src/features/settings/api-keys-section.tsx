@@ -7,10 +7,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { ENV_KEY_GROUPS } from '@/core/config/env-keys';
+import { DEFAULT_QWEN_BASE_URL, ENV_KEY_GROUPS } from '@/core/config/env-keys';
 import type { EnvSettingsResponse } from '@/app/api/settings/env/route';
 import { useToast } from '@/hooks/use-toast';
-import { Copy, ExternalLink, Info, KeyRound, Loader2, Save } from 'lucide-react';
+import { Copy, ExternalLink, Info, KeyRound, Loader2, Save, Zap } from 'lucide-react';
 
 type KeyFormState = Record<string, { apiKey: string; baseUrl: string }>;
 
@@ -45,10 +45,13 @@ function QwenKeyInstructions() {
           shown only once. After closing the dialog you only see a masked version.
         </li>
         <li>
-          Copy the <strong className="text-foreground">Base URL</strong> shown at the bottom of the API Keys page (use the copy button there).
+          Under <strong className="text-foreground">Pay-As-You-Go</strong>, copy the <strong className="text-foreground">OpenAI Compatible</strong> Base URL — or leave the default below (same value).
         </li>
         <li>Paste the key here, click &quot;Apply to all services&quot;, then save.</li>
       </ol>
+      <div className="rounded-md bg-muted/50 p-2.5 space-y-1 font-mono text-[10px] text-muted-foreground break-all">
+        Default Base URL: {DEFAULT_QWEN_BASE_URL}
+      </div>
       <div className="rounded-md bg-muted/50 p-2.5 space-y-1">
         <p className="font-medium text-foreground text-[11px]">Already created a key?</p>
         <p className="text-[10px] text-muted-foreground">
@@ -107,6 +110,8 @@ export function ApiKeysSection() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [status, setStatus] = useState<EnvSettingsResponse['keys']>({});
   const [form, setForm] = useState<KeyFormState>({});
 
@@ -216,6 +221,25 @@ export function ApiKeysSection() {
     });
   };
 
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/settings/env/test');
+      const data = await res.json();
+      setTestResult({ ok: data.ok, message: data.message });
+      if (data.ok) {
+        toast({ title: 'Qwen Cloud connected', description: data.message });
+      } else {
+        toast({ title: 'Connection failed', description: data.message, variant: 'destructive' });
+      }
+    } catch {
+      setTestResult({ ok: false, message: 'Could not run connection test' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4">
@@ -227,11 +251,23 @@ export function ApiKeysSection() {
           covers all services. Values are saved to your local{' '}
           <code className="text-[11px] bg-muted px-1 py-0.5 rounded">.env</code> file.
         </p>
-        <Button size="sm" className="gap-1.5 shrink-0" onClick={handleSave} disabled={saving}>
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-          Save Keys
-        </Button>
+        <div className="flex gap-2 shrink-0">
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={handleTestConnection} disabled={testing || configuredCount === 0}>
+            {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            Test
+          </Button>
+          <Button size="sm" className="gap-1.5" onClick={handleSave} disabled={saving}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            Save Keys
+          </Button>
+        </div>
       </div>
+
+      {testResult && (
+        <div className={`rounded-lg border px-4 py-3 text-xs ${testResult.ok ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-200/90' : 'border-red-500/30 bg-red-500/5 text-red-200/90'}`}>
+          {testResult.message}
+        </div>
+      )}
 
       {configuredCount === 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90 space-y-1">
@@ -307,6 +343,7 @@ export function ApiKeysSection() {
                   <Input
                     type="url"
                     className="mt-1 h-8 text-xs font-mono"
+                    placeholder={DEFAULT_QWEN_BASE_URL}
                     value={form[group.id]?.baseUrl ?? group.defaultBaseUrl}
                     onChange={(e) =>
                       setForm((prev) => ({

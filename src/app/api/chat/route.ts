@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isEnvValueConfigured } from '@/core/config/env-keys';
+import { getQwenConfig, callQwenChat, type QwenCallError } from '@/lib/qwen-client';
 import type { GenerativeUIComponent } from '@/core/types';
 
 const PLANNER_SYSTEM_PROMPT = `You are VideoForge's video planning assistant. Your job is to help users pick the concrete output specs for their video through a structured 4-step conversation, asking ONE question at a time.
@@ -36,48 +36,29 @@ interface QwenResponse {
   phase: 'planning' | 'ready';
 }
 
-const DEFAULT_MODEL = process.env.QWEN_PLANNER_MODEL || 'qwen-plus';
-
 function generativeUIForStep(step: number): GenerativeUIComponent[] | undefined {
   if (step === 1) {
-    return [
-      {
-        type: 'aspect_ratio_selector',
-        data: { options: ['9:16', '1:1', '16:9', '4:5'] },
-      },
-    ];
+    return [{ type: 'aspect_ratio_selector', data: { options: ['9:16', '1:1', '16:9', '4:5'] } }];
   }
   if (step === 2) {
-    return [
-      {
-        type: 'duration_selector',
-        data: {
-          options: [
-            { id: 'd-15', label: 'Short', seconds: 15 },
-            { id: 'd-30', label: 'Quick', seconds: 30 },
-            { id: 'd-60', label: 'Medium', seconds: 60 },
-            { id: 'd-90', label: 'Long', seconds: 90 },
-            { id: 'd-180', label: 'Extended', seconds: 180 },
-          ],
-        },
+    return [{
+      type: 'duration_selector',
+      data: {
+        options: [
+          { id: 'd-15', label: 'Short', seconds: 15 },
+          { id: 'd-30', label: 'Quick', seconds: 30 },
+          { id: 'd-60', label: 'Medium', seconds: 60 },
+          { id: 'd-90', label: 'Long', seconds: 90 },
+          { id: 'd-180', label: 'Extended', seconds: 180 },
+        ],
       },
-    ];
+    }];
   }
   if (step === 3) {
-    return [
-      {
-        type: 'resolution_selector',
-        data: { options: ['720p', '1080p', '1440p', '4K'] },
-      },
-    ];
+    return [{ type: 'resolution_selector', data: { options: ['720p', '1080p', '1440p', '4K'] } }];
   }
   if (step === 4) {
-    return [
-      {
-        type: 'fps_selector',
-        data: { options: [24, 30, 60] },
-      },
-    ];
+    return [{ type: 'fps_selector', data: { options: [24, 30, 60] } }];
   }
   return undefined;
 }
@@ -98,16 +79,28 @@ function fallbackReply(step: number): QwenResponse {
   };
 }
 
+function fallbackResponse(convo: { role: string; content: string }[], notice: string, errorKind: string) {
+  const step = inferStepFromMessages(convo);
+  const fb = fallbackReply(step);
+  return NextResponse.json({
+    content: `${notice}\n\n${fb.reply}`,
+    step: fb.step,
+    totalSteps: fb.totalSteps,
+    phase: fb.phase,
+    metadata: { model: 'fallback', error: errorKind },
+    generativeUI: generativeUIForStep(fb.step),
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { messages, agentType } = await req.json();
+    const { messages } = await req.json();
 
-    const apiKey = process.env.QWEN_API_KEY;
-    const baseUrl = process.env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
+    const config = await getQwenConfig();
 
-    if (!isEnvValueConfigured(apiKey)) {
+    if (!config) {
       return NextResponse.json({
-        content: "I can't reach Qwen Cloud yet — your API key isn't configured. Go to Settings → API Keys and add your `sk-` key from home.qwencloud.com/api-keys.",
+        content: "Your Qwen API key isn't set yet. Go to **Settings → API Keys**, paste your `sk-` key from [home.qwencloud.com/api-keys](https://home.qwencloud.com/api-keys), then restart the dev server.",
         step: 1,
         totalSteps: 4,
         phase: 'planning',
@@ -116,7 +109,6 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Build the message trail for Qwen. Keep it lean — only role + content.
     const convo = (messages || [])
       .filter((m: { role: string; content: string }) => m.role !== 'system' && m.content)
       .map((m: { role: string; content: string }) => ({
@@ -124,67 +116,49 @@ export async function POST(req: NextRequest) {
         content: m.content,
       }));
 
-    // Always lead with the planner system prompt.
     const payloadMessages = [
       { role: 'system', content: PLANNER_SYSTEM_PROMPT },
       ...convo,
     ];
 
-    let completion: Response;
+    let raw: string;
+    let tokens: number | undefined;
+
     try {
-      completion = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: DEFAULT_MODEL,
-          messages: payloadMessages,
-          response_format: { type: 'json_object' },
-          temperature: 0.7,
-          max_tokens: 600,
-        }),
-      });
-    } catch (fetchErr) {
-      console.error('Qwen fetch failed:', fetchErr);
-      const step = inferStepFromMessages(convo);
-      const fb = fallbackReply(step);
-      const host = (() => { try { return new URL(baseUrl).hostname; } catch { return baseUrl; } })();
-      return NextResponse.json({
-        content: `⚠️ Couldn't reach Qwen Cloud at ${host}. Check Settings → API Keys — intl keys need \`dashscope-intl.aliyuncs.com\`. Falling back to scripted planning.\n\n${fb.reply}`,
-        step: fb.step,
-        totalSteps: fb.totalSteps,
-        phase: fb.phase,
-        metadata: { model: 'fallback', error: 'network' },
-        generativeUI: generativeUIForStep(fb.step),
-      });
-    }
+      const result = await callQwenChat(config, payloadMessages, { jsonMode: true });
+      raw = result.content;
+      tokens = result.usage?.total_tokens;
+    } catch (err) {
+      const qErr = err as QwenCallError;
+      console.error('Qwen call failed:', qErr);
 
-    if (!completion.ok) {
-      const errText = await completion.text().catch(() => '');
-      console.error('Qwen API error', completion.status, errText);
-      // Fall back to scripted flow so the user isn't stuck
-      const step = inferStepFromMessages(convo);
-      const fb = fallbackReply(step);
-      return NextResponse.json({
-        content: `⚠️ Qwen Cloud returned an error (${completion.status}). Falling back to scripted planning.\n\n${fb.reply}`,
-        step: fb.step,
-        totalSteps: fb.totalSteps,
-        phase: fb.phase,
-        metadata: { model: 'fallback', error: completion.status },
-        generativeUI: generativeUIForStep(fb.step),
-      });
-    }
+      if (qErr.kind === 'network') {
+        return fallbackResponse(
+          convo,
+          `⚠️ **Your API key is saved**, but this machine can't reach Qwen Cloud (${qErr.hostname ?? 'API host'}). This is usually a DNS/network issue, not a bad key.\n\n**Fix:** On Mac → System Settings → Wi‑Fi → Details → DNS, add \`8.8.8.8\` and \`1.1.1.1\`, then restart \`npm run dev\`. Also copy the exact **Base URL** from the bottom of [home.qwencloud.com/api-keys](https://home.qwencloud.com/api-keys) into Settings → API Keys.\n\nContinuing with offline planning for now:`,
+          'network'
+        );
+      }
 
-    const data = await completion.json();
-    const raw = data?.choices?.[0]?.message?.content || '';
+      if (qErr.kind === 'auth') {
+        return fallbackResponse(
+          convo,
+          `⚠️ Qwen rejected the API key. Re-copy it from [home.qwencloud.com/api-keys](https://home.qwencloud.com/api-keys) and make sure the **Base URL** on that page matches Settings → API Keys. Restart \`npm run dev\` after saving.\n\nContinuing with offline planning:`,
+          'auth'
+        );
+      }
+
+      return fallbackResponse(
+        convo,
+        `⚠️ Qwen Cloud error: ${qErr.message}. Continuing with offline planning:`,
+        'api'
+      );
+    }
 
     let parsed: QwenResponse;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      // Model sometimes wraps JSON in prose — extract the first {...} block.
       const match = raw.match(/\{[\s\S]*\}/);
       if (match) {
         try {
@@ -202,7 +176,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Sanity-check the parsed values.
     const step = Math.max(1, Math.min(5, Number(parsed.step) || inferStepFromMessages(convo)));
     const totalSteps = Number(parsed.totalSteps) || 4;
     const phase = parsed.phase === 'ready' || step > totalSteps ? 'ready' : 'planning';
@@ -213,19 +186,15 @@ export async function POST(req: NextRequest) {
       totalSteps,
       phase,
       generativeUI: generativeUIForStep(step),
-      metadata: { model: DEFAULT_MODEL, tokens: data?.usage?.total_tokens },
+      metadata: { model: config.model, tokens },
     });
   } catch (error) {
     console.error('Chat API error:', error);
-    return NextResponse.json(
-      { error: 'Failed to process request' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to process request' }, { status: 500 });
   }
 }
 
 function inferStepFromMessages(convo: { role: string; content: string }[]): number {
-  // Each user reply advances one step. Start at step 1 when no user messages.
   const userTurns = convo.filter((m) => m.role === 'user').length;
   return Math.min(5, userTurns + 1);
 }
