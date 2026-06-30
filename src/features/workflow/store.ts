@@ -15,6 +15,7 @@ import {
   outputNodeId,
 } from './workflow-layout';
 import { nodeIdsForScene, sceneIdFromNodeId } from './workflow-node-utils';
+import { nodeIdForKind, type WorkflowNodeKind } from './workflow-node-catalog';
 
 function persistLayout(get: () => WorkflowState) {
   const projectId = get().layoutProjectId;
@@ -37,6 +38,55 @@ function persistStoryboard(get: () => WorkflowState) {
   });
 }
 
+function createSceneRecord(scenes: Scene[], afterIndex?: number): Scene {
+  const id = nanoid();
+  const order = scenes.length;
+  const prevScene = afterIndex !== undefined ? scenes[afterIndex] : null;
+  const startTime = prevScene ? prevScene.endTime : 0;
+
+  return {
+    id,
+    order,
+    title: `Scene ${scenes.length + 1}`,
+    prompt: '',
+    startTime,
+    endTime: startTime + 5,
+    duration: 5,
+    cameraMovement: 'static',
+    mood: '',
+    characters: [],
+    props: [],
+    transition: 'cut',
+    textOverlays: [],
+    stylePreset: 'cinematic',
+    referenceImageUrls: [],
+    status: 'idle',
+    versions: [],
+    aspectRatio: '9:16',
+    sceneDescription: '',
+    actionDescription: '',
+    visualStyle: '',
+    lighting: '',
+    details: '',
+    avoid: '',
+    startFrameUrl: undefined,
+    endFrameUrl: undefined,
+  };
+}
+
+function recalcSceneTiming(s: { sceneOrder: string[]; sceneMap: Record<string, Scene> }) {
+  s.sceneOrder.forEach((sid, idx) => {
+    if (s.sceneMap[sid]) {
+      s.sceneMap[sid].order = idx;
+      if (idx > 0) {
+        const prevSid = s.sceneOrder[idx - 1];
+        s.sceneMap[sid].startTime = s.sceneMap[prevSid]?.endTime || 0;
+      }
+      s.sceneMap[sid].endTime = s.sceneMap[sid].startTime + s.sceneMap[sid].duration;
+    }
+  });
+}
+
 interface WorkflowState {
   sceneMap: Record<string, Scene>;
   sceneOrder: string[];
@@ -46,6 +96,7 @@ interface WorkflowState {
 
   // Scene CRUD
   addScene: (afterIndex?: number) => void;
+  addNodeAt: (kind: WorkflowNodeKind, position: { x: number; y: number }, sceneId?: string) => string;
   removeScene: (id: string) => void;
   removeWorkflowNode: (nodeId: string) => void;
   updateScene: (id: string, updates: Partial<Scene>) => void;
@@ -86,85 +137,55 @@ export const useWorkflowStore = create<WorkflowState>()(
     isGeneratingAll: false,
 
     addScene: (afterIndex) => {
-      const id = nanoid();
       const scenes = get().getScenes();
-      const order = scenes.length;
-      const prevScene = afterIndex !== undefined ? scenes[afterIndex] : null;
-      const startTime = prevScene ? prevScene.endTime : 0;
-
-      const scene: Scene = {
-        id,
-        order,
-        title: `Scene ${scenes.length + 1}`,
-        prompt: '',
-        startTime,
-        endTime: startTime + 5,
-        duration: 5,
-        cameraMovement: 'static',
-        mood: '',
-        characters: [],
-        props: [],
-        transition: 'cut',
-        textOverlays: [],
-        stylePreset: 'cinematic',
-        referenceImageUrls: [],
-        status: 'idle',
-        versions: [],
-        aspectRatio: '9:16',
-        sceneDescription: '',
-        actionDescription: '',
-        visualStyle: '',
-        lighting: '',
-        details: '',
-        avoid: '',
-        startFrameUrl: undefined,
-        endFrameUrl: undefined,
-      };
+      const scene = createSceneRecord(scenes, afterIndex);
 
       set((s) => {
-        s.sceneMap[id] = scene;
+        s.sceneMap[scene.id] = scene;
         const insertAt = afterIndex !== undefined ? afterIndex + 1 : s.sceneOrder.length;
-        s.sceneOrder.splice(insertAt, 0, id);
-        // Re-calculate timing
-        s.sceneOrder.forEach((sid, idx) => {
-          if (s.sceneMap[sid]) {
-            s.sceneMap[sid].order = idx;
-            if (idx > 0) {
-              const prevSid = s.sceneOrder[idx - 1];
-              s.sceneMap[sid].startTime = s.sceneMap[prevSid]?.endTime || 0;
-            }
-            s.sceneMap[sid].endTime = s.sceneMap[sid].startTime + s.sceneMap[sid].duration;
-          }
-        });
+        s.sceneOrder.splice(insertAt, 0, scene.id);
+        recalcSceneTiming(s);
       });
 
-      // Persist
-      const project = useProjectStore.getState().getCurrentProject();
-      if (project) {
-        const newScenes = get().getScenes();
-        useProjectStore.getState().setStoryboard({
-          id: project.storyboard?.id || nanoid(),
-          scenes: newScenes,
-          totalDuration: get().getTotalDuration(),
-          narrativeArc: project.storyboard?.narrativeArc || '',
+      persistStoryboard(get);
+    },
+
+    addNodeAt: (kind, position, sceneId) => {
+      let sid = sceneId;
+      const isNewScene = !sid;
+
+      if (!sid) {
+        const scenes = get().getScenes();
+        const scene = createSceneRecord(scenes);
+        sid = scene.id;
+
+        set((s) => {
+          s.sceneMap[sid!] = scene;
+          s.sceneOrder.push(sid!);
+          recalcSceneTiming(s);
+          for (const nid of nodeIdsForScene(sid!)) {
+            s.hiddenNodeIds[nid] = true;
+          }
         });
+        persistStoryboard(get);
       }
+
+      const nodeId = nodeIdForKind(kind, sid);
+
+      set((s) => {
+        delete s.hiddenNodeIds[nodeId];
+        s.nodePositions[nodeId] = position;
+      });
+
+      persistLayout(get);
+      return nodeId;
     },
 
     removeScene: (id) => {
       set((s) => {
         delete s.sceneMap[id];
         s.sceneOrder = s.sceneOrder.filter((sid) => sid !== id);
-        s.sceneOrder.forEach((sid, idx) => {
-          if (s.sceneMap[sid]) {
-            s.sceneMap[sid].order = idx;
-            if (idx > 0) {
-              const prevSid = s.sceneOrder[idx - 1];
-              s.sceneMap[sid].startTime = s.sceneMap[prevSid]?.endTime || 0;
-            }
-            s.sceneMap[sid].endTime = s.sceneMap[sid].startTime + s.sceneMap[sid].duration;
-          }
-        });
+        recalcSceneTiming(s);
         for (const nid of nodeIdsForScene(id)) {
           delete s.nodePositions[nid];
           delete s.hiddenNodeIds[nid];

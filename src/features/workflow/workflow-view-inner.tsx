@@ -30,6 +30,7 @@ import { ScriptNode } from './script-node';
 import { FramesNode } from './frames-node';
 import { buildWorkflowGraph } from './workflow-graph';
 import { useWorkflowNodeContextMenu } from './workflow-context-menu';
+import { useWorkflowPaneMenu } from './workflow-pane-menu';
 import { useSettingsStore } from '@/features/settings/store';
 
 const AI_ACTIONS = [
@@ -67,7 +68,25 @@ export function WorkflowViewInner() {
   const [, setSelectedNode] = useState<string | null>(null);
   const [outputViewSceneId, setOutputViewSceneId] = useState<string | null>(null);
   const rfRef = useRef<ReactFlowInstance | null>(null);
-  const { onNodeContextMenu, menuUi, confirmUi, backdrop } = useWorkflowNodeContextMenu();
+  const { onNodeContextMenu, closeMenu: closeNodeMenu, menuUi, confirmUi, backdrop: nodeBackdrop } = useWorkflowNodeContextMenu();
+  const { openMenu: openPaneMenu, closeMenu: closePaneMenu, menuUi: paneMenuUi, backdrop: paneBackdrop } = useWorkflowPaneMenu();
+
+  const handlePaneContextMenu = useCallback((event: MouseEvent | React.MouseEvent) => {
+    event.preventDefault();
+    closeNodeMenu();
+    const flowPosition = rfRef.current?.screenToFlowPosition({
+      x: event.clientX,
+      y: event.clientY,
+    });
+    if (flowPosition) {
+      openPaneMenu(event.clientX, event.clientY, flowPosition);
+    }
+  }, [closeNodeMenu, openPaneMenu]);
+
+  const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: FlowNode) => {
+    closePaneMenu();
+    onNodeContextMenu(event, node);
+  }, [closePaneMenu, onNodeContextMenu]);
 
   const scenes = useMemo(
     () => sceneOrder.map((id) => sceneMap[id]).filter(Boolean),
@@ -143,7 +162,8 @@ export function WorkflowViewInner() {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onNodeDragStop={onNodeDragStop}
-          onNodeContextMenu={onNodeContextMenu}
+          onNodeContextMenu={handleNodeContextMenu}
+          onPaneContextMenu={handlePaneContextMenu}
           nodeTypes={nodeTypes}
           onInit={(inst) => { rfRef.current = inst; }}
           onNodeClick={(_, node) => setSelectedNode(node.id)}
@@ -224,8 +244,10 @@ export function WorkflowViewInner() {
           </Panel>
         </ReactFlow>
 
-        {backdrop}
+        {nodeBackdrop}
+        {paneBackdrop}
         {menuUi}
+        {paneMenuUi}
         {confirmUi}
 
         {outputViewSceneId && viewScene && viewUrl && (
