@@ -25,6 +25,7 @@ export type NodePositions = Record<string, { x: number; y: number }>;
 export type WorkflowLayout = {
   positions: NodePositions;
   hiddenNodes?: string[];
+  shownOutputs?: string[];
 };
 
 function isLegacyPositions(value: unknown): value is NodePositions {
@@ -35,10 +36,14 @@ function isLegacyPositions(value: unknown): value is NodePositions {
 
 function normalizeLayout(raw: unknown): WorkflowLayout | null {
   if (!raw) return null;
-  if (isLegacyPositions(raw)) return { positions: raw, hiddenNodes: [] };
+  if (isLegacyPositions(raw)) return { positions: raw, hiddenNodes: [], shownOutputs: [] };
   const layout = raw as WorkflowLayout;
   if (layout.positions) {
-    return { positions: layout.positions, hiddenNodes: layout.hiddenNodes ?? [] };
+    return {
+      positions: layout.positions,
+      hiddenNodes: layout.hiddenNodes ?? [],
+      shownOutputs: layout.shownOutputs ?? [],
+    };
   }
   return null;
 }

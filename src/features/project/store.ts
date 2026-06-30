@@ -9,6 +9,17 @@ import type {
 } from '@/core/types';
 import { DEFAULT_COST_CONTROLS, EXPORT_PRESETS } from '@/core/config';
 
+const CURRENT_PROJECT_KEY = 'videoforge-current-project-id';
+
+function persistCurrentProjectId(id: string | null) {
+  if (typeof window === 'undefined') return;
+  if (id) {
+    localStorage.setItem(CURRENT_PROJECT_KEY, id);
+  } else {
+    localStorage.removeItem(CURRENT_PROJECT_KEY);
+  }
+}
+
 interface ProjectState {
   projects: Project[];
   currentProjectId: string | null;
@@ -44,6 +55,13 @@ export const useProjectStore = create<ProjectState>()(
           s.projects = projects as Project[];
           s.isLoading = false;
         });
+
+        const savedId = typeof window !== 'undefined'
+          ? localStorage.getItem(CURRENT_PROJECT_KEY)
+          : null;
+        if (savedId && (projects as Project[]).some((p) => p.id === savedId)) {
+          await get().openProject(savedId);
+        }
       } catch {
         set((s) => { s.isLoading = false; });
       }
@@ -69,6 +87,7 @@ export const useProjectStore = create<ProjectState>()(
         versions: [],
       };
       await storage.saveProject(project);
+      persistCurrentProjectId(project.id);
       set((s) => {
         s.projects.unshift(project);
         s.currentProjectId = project.id;
@@ -79,6 +98,7 @@ export const useProjectStore = create<ProjectState>()(
     openProject: async (id) => {
       const project = await storage.getProject(id);
       if (project) {
+        persistCurrentProjectId(id);
         set((s) => {
           s.currentProjectId = id;
           const idx = s.projects.findIndex((p) => p.id === id);
@@ -95,6 +115,7 @@ export const useProjectStore = create<ProjectState>()(
         s.projects = s.projects.filter((p) => p.id !== id);
         if (s.currentProjectId === id) {
           s.currentProjectId = null;
+          persistCurrentProjectId(null);
         }
       });
     },

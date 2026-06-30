@@ -25,7 +25,6 @@ export function PhaseStepper({ currentPhase, onPhaseChange }: PhaseStepperProps)
         {PHASES.map((phase, idx) => {
           const isActive = phase.id === normalizedPhase;
           const isCompleted = idx < currentIndex;
-          const isClickable = true;
 
           return (
             <div key={phase.id} className="flex items-center">
@@ -33,17 +32,16 @@ export function PhaseStepper({ currentPhase, onPhaseChange }: PhaseStepperProps)
                 <div className={`w-6 h-px mx-1 ${isCompleted ? 'bg-primary' : 'bg-border'}`} />
               )}
               <button
-                onClick={() => isClickable && onPhaseChange(phase.id)}
-                disabled={!isClickable}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all whitespace-nowrap ${
+                onClick={() => onPhaseChange(phase.id)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
                   isActive
                     ? 'bg-primary text-primary-foreground shadow-sm'
                     : isCompleted
-                    ? 'bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer'
-                    : 'text-muted-foreground cursor-not-allowed opacity-50'
+                    ? 'bg-primary/10 text-primary hover:bg-primary/20'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 }`}
               >
-                <span className={`text-sm ${isActive ? '' : isCompleted ? '' : 'opacity-50'}`}>
+                <span className="text-sm">
                   {isCompleted ? '✓' : phase.icon}
                 </span>
                 <span className="hidden sm:inline">{phase.label}</span>

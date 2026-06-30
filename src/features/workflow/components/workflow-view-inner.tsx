@@ -22,7 +22,7 @@ import { useProjectStore } from '@/features/project/store';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { Plus, Play, LayoutGrid, Loader2, AlignHorizontalSpaceAround } from 'lucide-react';
+import { Play, Loader2, AlignHorizontalSpaceAround } from 'lucide-react';
 import { SceneNode } from './nodes/scene-node';
 import { OutputNode } from './nodes/output-node';
 import { ParametersNode } from './nodes/params-node';
@@ -48,7 +48,6 @@ export function WorkflowViewInner() {
   const sceneOrder = useWorkflowStore((s) => s.sceneOrder);
   const nodePositions = useWorkflowStore((s) => s.nodePositions);
   const hiddenNodeIds = useWorkflowStore((s) => s.hiddenNodeIds);
-  const addScene = useWorkflowStore((s) => s.addScene);
   const updateScene = useWorkflowStore((s) => s.updateScene);
   const generateAllScenes = useWorkflowStore((s) => s.generateAllScenes);
   const isGeneratingAll = useWorkflowStore((s) => s.isGeneratingAll);
@@ -57,7 +56,7 @@ export function WorkflowViewInner() {
   const applyAutoLayout = useWorkflowStore((s) => s.applyAutoLayout);
   const loadLayoutForProject = useWorkflowStore((s) => s.loadLayoutForProject);
   const edgeLabelPlacement = useSettingsStore((s) => s.settings.edgeLabelPlacement ?? 'in-node');
-  const { setPhase, currentProjectId, getCurrentProject } = useProjectStore();
+  const { currentProjectId, getCurrentProject } = useProjectStore();
   const currentProject = getCurrentProject();
   const [, setSelectedNode] = useState<string | null>(null);
   const [outputViewSceneId, setOutputViewSceneId] = useState<string | null>(null);
@@ -192,14 +191,8 @@ export function WorkflowViewInner() {
           />
 
           <Panel position="top-left" className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => addScene()} className="gap-1.5 shadow-lg bg-card border-border">
-              <Plus className="w-3.5 h-3.5" /> Add Scene
-            </Button>
             <Button variant="outline" size="sm" onClick={handleAutoLayout} className="gap-1.5 shadow-lg bg-card border-border">
               <AlignHorizontalSpaceAround className="w-3.5 h-3.5" /> Auto Layout
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setPhase('timeline')} className="gap-1.5 shadow-lg bg-card border-border">
-              <LayoutGrid className="w-3.5 h-3.5" /> Timeline
             </Button>
           </Panel>
 

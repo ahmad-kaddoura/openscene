@@ -13,6 +13,7 @@ import {
   loadLayoutFromStorage,
   saveLayoutToStorage,
   outputNodeId,
+  shouldShowOutputNode,
 } from './graph/workflow-layout';
 import { nodeIdsForScene, sceneIdFromNodeId } from './graph/workflow-node-utils';
 import { nodeIdForKind, type WorkflowNodeKind } from './graph/workflow-node-catalog';
@@ -23,19 +24,57 @@ function persistLayout(get: () => WorkflowState) {
   saveLayoutToStorage(projectId, {
     positions: get().nodePositions,
     hiddenNodes: Object.keys(get().hiddenNodeIds),
+    shownOutputs: Object.keys(get().shownOutputSceneIds),
   });
 }
 
-function persistStoryboard(get: () => WorkflowState) {
+let persistStoryboardTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function persistStoryboard(get: () => WorkflowState) {
   const project = useProjectStore.getState().getCurrentProject();
   if (!project) return;
   const scenes = get().getScenes();
-  useProjectStore.getState().setStoryboard({
+  await useProjectStore.getState().setStoryboard({
     id: project.storyboard?.id || nanoid(),
     scenes,
     totalDuration: get().getTotalDuration(),
     narrativeArc: project.storyboard?.narrativeArc || '',
   });
+}
+
+function schedulePersistStoryboard(get: () => WorkflowState) {
+  if (persistStoryboardTimer) clearTimeout(persistStoryboardTimer);
+  persistStoryboardTimer = setTimeout(() => {
+    void persistStoryboard(get);
+    persistStoryboardTimer = null;
+  }, 350);
+}
+
+function flushPersistStoryboard(get: () => WorkflowState) {
+  if (persistStoryboardTimer) {
+    clearTimeout(persistStoryboardTimer);
+    persistStoryboardTimer = null;
+  }
+  void persistStoryboard(get);
+}
+
+function syncOutputNodeVisibility(state: {
+  sceneOrder: string[];
+  sceneMap: Record<string, Scene>;
+  hiddenNodeIds: Record<string, true>;
+  shownOutputSceneIds: Record<string, true>;
+}) {
+  for (const sceneId of state.sceneOrder) {
+    const scene = state.sceneMap[sceneId];
+    if (!scene) continue;
+    if (shouldShowOutputNode(scene)) {
+      delete state.hiddenNodeIds[outputNodeId(sceneId)];
+      state.shownOutputSceneIds[sceneId] = true;
+    } else {
+      state.hiddenNodeIds[outputNodeId(sceneId)] = true;
+      delete state.shownOutputSceneIds[sceneId];
+    }
+  }
 }
 
 function createSceneRecord(scenes: Scene[], afterIndex?: number): Scene {
@@ -92,6 +131,7 @@ interface WorkflowState {
   sceneOrder: string[];
   nodePositions: Record<string, { x: number; y: number }>;
   hiddenNodeIds: Record<string, true>;
+  shownOutputSceneIds: Record<string, true>;
   layoutProjectId: string | null;
 
   // Scene CRUD
@@ -105,10 +145,11 @@ interface WorkflowState {
 
   // Scene status
   setSceneStatus: (id: string, status: SceneStatus) => void;
-  generateScene: (id: string) => Promise<void>;
+  generateScene: (id: string, options?: { resume?: boolean }) => Promise<void>;
   generateAllScenes: () => Promise<void>;
-  clearSceneOutput: (id: string) => void;
+  clearSceneOutput: (id: string) => Promise<void>;
   retrySceneGeneration: (id: string) => Promise<void>;
+  resumePendingGenerations: () => Promise<void>;
   isGeneratingAll: boolean;
 
   // AI actions on scenes
@@ -119,6 +160,7 @@ interface WorkflowState {
   getScenes: () => Scene[];
   getTotalDuration: () => number;
   buildFromStoryboard: (scenes: Scene[]) => void;
+  hydrateFromProject: (projectId: string, scenes: Scene[]) => Promise<void>;
 
   // Layout
   loadLayoutForProject: (projectId: string) => void;
@@ -133,6 +175,7 @@ export const useWorkflowStore = create<WorkflowState>()(
     sceneOrder: [],
     nodePositions: {},
     hiddenNodeIds: {},
+    shownOutputSceneIds: {},
     layoutProjectId: null,
     isGeneratingAll: false,
 
@@ -147,7 +190,7 @@ export const useWorkflowStore = create<WorkflowState>()(
         recalcSceneTiming(s);
       });
 
-      persistStoryboard(get);
+      void persistStoryboard(get);
     },
 
     addNodeAt: (kind, position, sceneId) => {
@@ -167,7 +210,7 @@ export const useWorkflowStore = create<WorkflowState>()(
             s.hiddenNodeIds[nid] = true;
           }
         });
-        persistStoryboard(get);
+        void persistStoryboard(get);
       }
 
       const nodeId = nodeIdForKind(kind, sid);
@@ -190,10 +233,11 @@ export const useWorkflowStore = create<WorkflowState>()(
           delete s.nodePositions[nid];
           delete s.hiddenNodeIds[nid];
         }
+        delete s.shownOutputSceneIds[id];
       });
       const projectId = get().layoutProjectId;
       if (projectId) persistLayout(get);
-      persistStoryboard(get);
+      void persistStoryboard(get);
     },
 
     removeWorkflowNode: (nodeId) => {
@@ -287,10 +331,13 @@ export const useWorkflowStore = create<WorkflowState>()(
       });
     },
 
-    generateScene: async (id) => {
+    generateScene: async (id, options) => {
       const scene = get().sceneMap[id];
       if (!scene) return;
-      if (scene.status === 'generating' || scene.status === 'regenerating' || scene.status === 'queued') return;
+      const isResume = options?.resume === true;
+      if (!isResume && (scene.status === 'generating' || scene.status === 'regenerating' || scene.status === 'queued')) {
+        return;
+      }
 
       const template = useSettingsStore.getState().settings.scenePromptTemplate;
       const builtPrompt = buildScenePrompt(scene, template);
@@ -298,11 +345,14 @@ export const useWorkflowStore = create<WorkflowState>()(
       set((s) => {
         if (s.sceneMap[id]) {
           s.sceneMap[id].status = 'generating';
-          s.sceneMap[id].generationProgress = 0;
+          s.sceneMap[id].generationProgress = isResume ? (s.sceneMap[id].generationProgress ?? 0) : 0;
           s.sceneMap[id].enhancedPrompt = builtPrompt;
           delete s.hiddenNodeIds[outputNodeId(id)];
+          s.shownOutputSceneIds[id] = true;
         }
       });
+      persistLayout(get);
+      await persistStoryboard(get);
 
       try {
         const result = await generateSceneAssets(
@@ -313,6 +363,7 @@ export const useWorkflowStore = create<WorkflowState>()(
                 s.sceneMap[id].generationProgress = pct;
               }
             });
+            schedulePersistStoryboard(get);
           },
           {
             prompt: builtPrompt,
@@ -340,8 +391,10 @@ export const useWorkflowStore = create<WorkflowState>()(
             generatedVideoUrl: result.videoUrl,
             createdAt: new Date().toISOString(),
           });
+          s.shownOutputSceneIds[id] = true;
         });
-        persistStoryboard(get);
+        await persistStoryboard(get);
+        persistLayout(get);
         if (project) {
           await useProjectStore.getState().updateCurrentProject({
             usageEvents: [
@@ -366,8 +419,11 @@ export const useWorkflowStore = create<WorkflowState>()(
           if (s.sceneMap[id]) {
             s.sceneMap[id].status = 'failed';
             s.sceneMap[id].generationProgress = 0;
+            s.shownOutputSceneIds[id] = true;
           }
         });
+        await persistStoryboard(get);
+        persistLayout(get);
       }
     },
 
@@ -381,9 +437,15 @@ export const useWorkflowStore = create<WorkflowState>()(
 
       for (const sc of pending) {
         set((s) => {
-          if (s.sceneMap[sc.id]) s.sceneMap[sc.id].status = 'queued';
+          if (s.sceneMap[sc.id]) {
+            s.sceneMap[sc.id].status = 'queued';
+            delete s.hiddenNodeIds[outputNodeId(sc.id)];
+            s.shownOutputSceneIds[sc.id] = true;
+          }
         });
       }
+      persistLayout(get);
+      await persistStoryboard(get);
 
       for (const sc of pending) {
         await get().generateScene(sc.id);
@@ -392,7 +454,7 @@ export const useWorkflowStore = create<WorkflowState>()(
       set((s) => { s.isGeneratingAll = false; });
     },
 
-    clearSceneOutput: (id) => {
+    clearSceneOutput: async (id) => {
       set((s) => {
         if (!s.sceneMap[id]) return;
         const sc = s.sceneMap[id];
@@ -402,8 +464,11 @@ export const useWorkflowStore = create<WorkflowState>()(
         sc.generatedEndFrameUrl = undefined;
         sc.generatedVideoUrl = undefined;
         sc.generatedAudioUrl = undefined;
+        s.hiddenNodeIds[outputNodeId(id)] = true;
+        delete s.shownOutputSceneIds[id];
       });
-      persistStoryboard(get);
+      await persistStoryboard(get);
+      persistLayout(get);
     },
 
     retrySceneGeneration: async (id) => {
@@ -411,6 +476,27 @@ export const useWorkflowStore = create<WorkflowState>()(
       if (!scene) return;
       if (scene.status === 'generating' || scene.status === 'queued') return;
       await get().generateScene(id);
+    },
+
+    resumePendingGenerations: async () => {
+      const interrupted = get().getScenes().filter(
+        (sc) => sc.status === 'generating' || sc.status === 'regenerating' || sc.status === 'queued',
+      );
+      if (interrupted.length === 0) return;
+
+      for (const sc of interrupted) {
+        set((s) => {
+          if (s.sceneMap[sc.id]) {
+            delete s.hiddenNodeIds[outputNodeId(sc.id)];
+            s.shownOutputSceneIds[sc.id] = true;
+          }
+        });
+      }
+      persistLayout(get);
+
+      for (const sc of interrupted) {
+        await get().generateScene(sc.id, { resume: true });
+      }
     },
 
     updateScenePrompt: (id, newPrompt) => {
@@ -435,7 +521,31 @@ export const useWorkflowStore = create<WorkflowState>()(
           s.sceneMap[sc.id] = sc;
           return sc.id;
         });
+        syncOutputNodeVisibility(s);
       });
+      persistLayout(get);
+    },
+
+    hydrateFromProject: async (projectId, scenes) => {
+      const saved = loadLayoutFromStorage(projectId);
+      set((s) => {
+        s.layoutProjectId = projectId;
+        s.sceneMap = {};
+        s.sceneOrder = scenes.map((sc) => {
+          s.sceneMap[sc.id] = sc;
+          return sc.id;
+        });
+        s.nodePositions = saved?.positions ?? {};
+        s.hiddenNodeIds = Object.fromEntries(
+          (saved?.hiddenNodes ?? []).map((id) => [id, true as const]),
+        );
+        s.shownOutputSceneIds = Object.fromEntries(
+          (saved?.shownOutputs ?? []).map((id) => [id, true as const]),
+        );
+        syncOutputNodeVisibility(s);
+      });
+      persistLayout(get);
+      await get().resumePendingGenerations();
     },
 
     loadLayoutForProject: (projectId) => {
@@ -446,7 +556,12 @@ export const useWorkflowStore = create<WorkflowState>()(
         s.hiddenNodeIds = Object.fromEntries(
           (saved?.hiddenNodes ?? []).map((id) => [id, true as const]),
         );
+        s.shownOutputSceneIds = Object.fromEntries(
+          (saved?.shownOutputs ?? []).map((id) => [id, true as const]),
+        );
+        syncOutputNodeVisibility(s);
       });
+      persistLayout(get);
     },
 
     setNodePosition: (nodeId, position) => {
@@ -468,3 +583,10 @@ export const useWorkflowStore = create<WorkflowState>()(
     getNodePositions: () => get().nodePositions,
   }))
 );
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    flushPersistStoryboard(() => useWorkflowStore.getState());
+    persistLayout(() => useWorkflowStore.getState());
+  });
+}
