@@ -24,20 +24,132 @@ export function allScenesReadyForFinalOutput(scenes: Scene[]): boolean {
 }
 
 export const LAYOUT = {
-  ASSET_WIDTH: 220,
+  ASSET_WIDTH: 230,
   PARAMETERS_WIDTH: 180,
   SCRIPT_WIDTH: 220,
   FRAMES_WIDTH: 180,
   SCENE_WIDTH: 240,
   OUTPUT_WIDTH: 220,
-  COL_GAP: 56,
-  GROUP_GAP: 120,
-  INPUT_STACK_GAP: 188,
-  ASSET_STACK_GAP: 190,
-  SCENE_LANE_GAP: 124,
+  COL_GAP: 64,
+  GROUP_GAP: 140,
+  ROW_GAP: 48,
+  HEIGHT_BUFFER: 24,
+  PARAMETERS_HEIGHT: 300,
+  SCRIPT_HEIGHT_MIN: 110,
+  FRAMES_HEIGHT_MIN: 170,
+  SCENE_HEIGHT_MIN: 210,
+  OUTPUT_HEIGHT_MIN: 180,
+  ASSET_HEIGHT_MIN: 300,
   TOP_PADDING: 80,
   LEFT_PADDING: 80,
 } as const;
+
+const SCRIPT_SECTION_KEYS = [
+  'sceneDescription',
+  'actionDescription',
+  'visualStyle',
+  'lighting',
+  'details',
+  'avoid',
+] as const;
+
+function parseAspectRatio(ratio?: string): number {
+  if (!ratio) return 16 / 9;
+  const [w, h] = ratio.split(':').map(Number);
+  if (!w || !h) return 16 / 9;
+  return h / w;
+}
+
+function imageHeightForWidth(width: number, aspectRatio?: string) {
+  return Math.ceil(width * parseAspectRatio(aspectRatio));
+}
+
+function withBuffer(height: number) {
+  return height + LAYOUT.HEIGHT_BUFFER;
+}
+
+function estimateParametersHeight() {
+  return withBuffer(LAYOUT.PARAMETERS_HEIGHT);
+}
+
+function estimateScriptHeight(scene: Scene) {
+  const chrome = 52;
+  const filled = SCRIPT_SECTION_KEYS.filter((key) => scene[key]?.trim()).length;
+  if (filled === 0) return withBuffer(chrome + 52);
+  return withBuffer(chrome + Math.min(236, 36 + filled * 34));
+}
+
+function estimateFrameSlotHeight(url?: string, aspectRatio?: string) {
+  if (!url) return 67;
+  return 16 + imageHeightForWidth(LAYOUT.FRAMES_WIDTH - 20, aspectRatio);
+}
+
+function estimateFramesHeight(scene: Scene) {
+  const chrome = 52;
+  const slots =
+    estimateFrameSlotHeight(scene.startFrameUrl, scene.aspectRatio) +
+    estimateFrameSlotHeight(scene.endFrameUrl, scene.aspectRatio);
+  return withBuffer(chrome + slots + 8);
+}
+
+function estimateSceneHeight(scene: Scene) {
+  const chrome = 132;
+  const preview =
+    scene.startFrameUrl ??
+    scene.generatedStartFrameUrl ??
+    scene.referenceImageUrls?.[0];
+  if (!preview) return withBuffer(chrome + 84);
+  return withBuffer(chrome + imageHeightForWidth(LAYOUT.SCENE_WIDTH, scene.aspectRatio));
+}
+
+function estimateOutputHeight(scene: Scene) {
+  const chrome = 108;
+  if (scene.status === 'generating' || scene.status === 'regenerating' || scene.status === 'queued') {
+    return withBuffer(chrome + 152);
+  }
+  if (scene.status === 'failed') return withBuffer(chrome + 124);
+  if (scene.generatedVideoUrl || scene.generatedStartFrameUrl) {
+    return withBuffer(chrome + imageHeightForWidth(LAYOUT.OUTPUT_WIDTH, scene.aspectRatio));
+  }
+  return withBuffer(LAYOUT.OUTPUT_HEIGHT_MIN);
+}
+
+function estimateAssetHeight(asset: ReusableAssetPlan) {
+  const chrome = 196;
+  if (!asset.generatedImageUrl) return withBuffer(chrome + 124);
+  return withBuffer(chrome + imageHeightForWidth(LAYOUT.ASSET_WIDTH - 24, '9:16'));
+}
+
+function maxOf(values: number[], fallback: number) {
+  return values.length > 0 ? Math.max(fallback, ...values) : fallback;
+}
+
+function sceneColumnWidth() {
+  return (
+    LAYOUT.PARAMETERS_WIDTH +
+    LAYOUT.COL_GAP +
+    LAYOUT.SCENE_WIDTH +
+    LAYOUT.COL_GAP +
+    LAYOUT.OUTPUT_WIDTH +
+    LAYOUT.GROUP_GAP
+  );
+}
+
+function inputStackMetrics(scenes: Scene[], baseY: number) {
+  const paramsH = estimateParametersHeight();
+  const scriptH = maxOf(scenes.map(estimateScriptHeight), LAYOUT.SCRIPT_HEIGHT_MIN);
+  const framesH = maxOf(scenes.map(estimateFramesHeight), LAYOUT.FRAMES_HEIGHT_MIN);
+  const sceneH = maxOf(scenes.map(estimateSceneHeight), LAYOUT.SCENE_HEIGHT_MIN);
+
+  const parametersY = baseY;
+  const scriptY = parametersY + paramsH + LAYOUT.ROW_GAP;
+  const framesY = scriptY + scriptH + LAYOUT.ROW_GAP;
+  const stackBottom = framesY + framesH;
+  const stackHeight = stackBottom - parametersY;
+  const sceneY = parametersY + Math.max(0, Math.floor((stackHeight - sceneH) / 2));
+
+  return { parametersY, scriptY, framesY, sceneY, stackHeight, sceneH };
+}
 
 export type NodePositions = Record<string, { x: number; y: number }>;
 export type NodeColorStyles = Record<string, { border?: string; line?: string }>;
@@ -105,67 +217,52 @@ export function computeAutoLayout(
   const sceneStartX = reusableAssets.length > 0
     ? LAYOUT.LEFT_PADDING + LAYOUT.ASSET_WIDTH + LAYOUT.GROUP_GAP
     : LAYOUT.LEFT_PADDING;
-  const hasTallAssetStack = reusableAssets.length > 2;
-  const baseY = LAYOUT.TOP_PADDING + (hasTallAssetStack ? 48 : 0);
-  const sceneLaneHeight = LAYOUT.INPUT_STACK_GAP * 2 + LAYOUT.SCENE_LANE_GAP;
+  const baseY = LAYOUT.TOP_PADDING;
+  const stack = inputStackMetrics(scenes, baseY);
+  const columnBottomY: number[] = [];
 
   reusableAssets.forEach((asset, idx) => {
     const column = Math.floor(idx / 4);
-    const row = idx % 4;
+    const y = columnBottomY[column] ?? baseY;
     positions[asset.id] = {
       x: LAYOUT.LEFT_PADDING + column * (LAYOUT.ASSET_WIDTH + LAYOUT.COL_GAP),
-      y: baseY + row * LAYOUT.ASSET_STACK_GAP,
+      y,
     };
+    columnBottomY[column] = y + estimateAssetHeight(asset) + LAYOUT.ROW_GAP;
   });
 
   scenes.forEach((scene, idx) => {
-    const x = sceneStartX + idx * (
-      LAYOUT.PARAMETERS_WIDTH +
-      LAYOUT.COL_GAP +
-      LAYOUT.SCENE_WIDTH +
-      LAYOUT.COL_GAP +
-      LAYOUT.OUTPUT_WIDTH +
-      LAYOUT.GROUP_GAP
-    );
-    const y = baseY + (idx % 2) * 44;
-    const hasOutput = shouldShowOutputNode(scene);
-
-    positions[parametersNodeId(scene.id)] = { x, y };
-    positions[scriptNodeId(scene.id)] = { x, y: y + LAYOUT.INPUT_STACK_GAP };
-    positions[framesNodeId(scene.id)] = { x, y: y + LAYOUT.INPUT_STACK_GAP * 2 };
-
+    const x = sceneStartX + idx * sceneColumnWidth();
     const sceneX = x + LAYOUT.PARAMETERS_WIDTH + LAYOUT.COL_GAP;
-    const sceneY = y + LAYOUT.INPUT_STACK_GAP;
-    positions[scene.id] = { x: sceneX, y: sceneY };
+    const outputH = estimateOutputHeight(scene);
+    const outputY = stack.sceneY + Math.max(0, Math.floor((stack.sceneH - outputH) / 2));
 
-    if (hasOutput) {
-      positions[outputNodeId(scene.id)] = {
-        x: sceneX + LAYOUT.SCENE_WIDTH + LAYOUT.COL_GAP,
-        y: sceneY + 4,
-      };
-    }
-
-    if (!hasOutput) {
-      positions[outputNodeId(scene.id)] = {
-        x: sceneX + LAYOUT.SCENE_WIDTH + LAYOUT.COL_GAP,
-        y: sceneY + 4,
-      };
-    }
+    positions[parametersNodeId(scene.id)] = { x, y: stack.parametersY };
+    positions[scriptNodeId(scene.id)] = { x, y: stack.scriptY };
+    positions[framesNodeId(scene.id)] = { x, y: stack.framesY };
+    positions[scene.id] = { x: sceneX, y: stack.sceneY };
+    positions[outputNodeId(scene.id)] = {
+      x: sceneX + LAYOUT.SCENE_WIDTH + LAYOUT.COL_GAP,
+      y: outputY,
+    };
   });
 
   if (scenes.length > 0 && allScenesReadyForFinalOutput(scenes)) {
     const lastScene = scenes[scenes.length - 1];
-    const lastScenePos = positions[lastScene.id] ?? { x: 480, y: baseY + LAYOUT.INPUT_STACK_GAP };
+    const lastScenePos = positions[lastScene.id] ?? { x: 480, y: stack.sceneY };
     positions[finalOutputNodeId] = {
       x: lastScenePos.x + LAYOUT.SCENE_WIDTH + LAYOUT.COL_GAP + LAYOUT.OUTPUT_WIDTH + LAYOUT.GROUP_GAP,
-      y: baseY + LAYOUT.INPUT_STACK_GAP + Math.min(1, scenes.length - 1) * 44,
+      y: stack.sceneY,
     };
   }
 
   if (scenes.length === 0 && reusableAssets.length > 0) {
+    const tallestAssetColumn = columnBottomY.length > 0
+      ? Math.max(...columnBottomY)
+      : baseY + LAYOUT.ASSET_HEIGHT_MIN;
     positions[finalOutputNodeId] = {
       x: sceneStartX,
-      y: baseY + sceneLaneHeight,
+      y: tallestAssetColumn + LAYOUT.ROW_GAP,
     };
   }
 
