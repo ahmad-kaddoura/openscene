@@ -40,11 +40,13 @@ export const LAYOUT = {
 } as const;
 
 export type NodePositions = Record<string, { x: number; y: number }>;
+export type NodeColorStyles = Record<string, { border?: string; line?: string }>;
 
 export type WorkflowLayout = {
   positions: NodePositions;
   hiddenNodes?: string[];
   shownOutputs?: string[];
+  nodeColors?: NodeColorStyles;
 };
 
 function isLegacyPositions(value: unknown): value is NodePositions {
@@ -62,6 +64,7 @@ function normalizeLayout(raw: unknown): WorkflowLayout | null {
       positions: layout.positions,
       hiddenNodes: layout.hiddenNodes ?? [],
       shownOutputs: layout.shownOutputs ?? [],
+      nodeColors: layout.nodeColors ?? {},
     };
   }
   return null;

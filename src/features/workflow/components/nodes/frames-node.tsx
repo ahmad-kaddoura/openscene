@@ -44,7 +44,6 @@ function FrameSlot({
       >
         {url ? (
           <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={url} alt={label} className="block w-full h-auto" />
             <button
               type="button"
@@ -68,6 +67,7 @@ function FrameSlot({
 
 function FramesNodeComponent({ data }: NodeProps) {
   const sceneId = (data as { sceneId: string }).sceneId;
+  const workflowStyle = (data as { workflowStyle?: { border?: string; line?: string } }).workflowStyle;
   const scene = useWorkflowStore((s) => s.sceneMap[sceneId]);
   const updateScene = useWorkflowStore((s) => s.updateScene);
 
@@ -82,7 +82,10 @@ function FramesNodeComponent({ data }: NodeProps) {
         className="!w-3 !h-3 !bg-teal-500 !border-2 !border-background"
       />
 
-      <div className="w-[180px] rounded-xl border border-border bg-card shadow-lg overflow-hidden">
+      <div
+        className="w-[180px] rounded-xl border border-border bg-card shadow-lg overflow-hidden"
+        style={workflowStyle?.border ? { borderColor: workflowStyle.border } : undefined}
+      >
         <div className="px-2.5 py-1.5 border-b border-border bg-muted/30 flex items-center gap-1">
           <GalleryHorizontalEnd className="w-3 h-3 text-teal-400" />
           <span className="text-[9px] uppercase tracking-wider text-teal-400 font-semibold">

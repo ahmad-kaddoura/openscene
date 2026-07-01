@@ -14,6 +14,7 @@ import {
   resolvePosition,
   computeAutoLayout,
   type NodePositions,
+  type NodeColorStyles,
 } from './workflow-layout';
 
 export {
@@ -57,6 +58,7 @@ export function buildWorkflowGraph(
   edgeLabelPlacement: EdgeLabelPlacement = 'in-node',
   hiddenNodeIds: Record<string, true> = {},
   reusableAssets: ReusableAssetPlan[] = [],
+  nodeColorStyles: NodeColorStyles = {},
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -65,6 +67,8 @@ export function buildWorkflowGraph(
   const onEdge = edgeLabelPlacement === 'on-edge';
   const visible = (id: string) => !hiddenNodeIds[id];
   const link = (source: string, target: string) => visible(source) && visible(target);
+  const workflowStyle = (id: string) => nodeColorStyles[id] ?? {};
+  const edgeStyle = (source: string, target: string, fallback: string) => nodeColorStyles[source]?.line ?? nodeColorStyles[target]?.line ?? fallback;
 
   reusableAssets.forEach((asset, idx) => {
     if (!visible(asset.id)) return;
@@ -72,7 +76,7 @@ export function buildWorkflowGraph(
       id: asset.id,
       type: 'asset',
       position: savedPositions?.[asset.id] ?? defaults[asset.id] ?? { x: 80, y: 80 + idx * 190 },
-      data: asset as unknown as Record<string, unknown>,
+      data: { ...(asset as unknown as Record<string, unknown>), workflowStyle: workflowStyle(asset.id) },
     });
   });
 
@@ -89,7 +93,7 @@ export function buildWorkflowGraph(
         id: pid,
         type: 'parameters',
         position: pos(pid),
-        data: { sceneId: scene.id, label: 'parameters' },
+        data: { sceneId: scene.id, label: 'parameters', workflowStyle: workflowStyle(pid) },
       });
     }
 
@@ -98,7 +102,7 @@ export function buildWorkflowGraph(
         id: sid,
         type: 'script',
         position: pos(sid),
-        data: { sceneId: scene.id, label: 'script' },
+        data: { sceneId: scene.id, label: 'script', workflowStyle: workflowStyle(sid) },
       });
     }
 
@@ -107,7 +111,7 @@ export function buildWorkflowGraph(
         id: fid,
         type: 'frames',
         position: pos(fid),
-        data: { sceneId: scene.id, label: 'frames' },
+        data: { sceneId: scene.id, label: 'frames', workflowStyle: workflowStyle(fid) },
       });
     }
 
@@ -116,7 +120,7 @@ export function buildWorkflowGraph(
         id: scene.id,
         type: 'scene',
         position: pos(scene.id),
-        data: scene as unknown as Record<string, unknown>,
+        data: { ...(scene as unknown as Record<string, unknown>), workflowStyle: workflowStyle(scene.id) },
       });
     }
 
@@ -128,8 +132,8 @@ export function buildWorkflowGraph(
         target: scene.id,
         targetHandle: 'parameters-in',
         type: 'smoothstep',
-        style: { stroke: C_PARAMETERS, strokeWidth: 1.5, opacity: 0.7 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: C_PARAMETERS },
+        style: { stroke: edgeStyle(pid, scene.id, C_PARAMETERS), strokeWidth: 1.5, opacity: 0.7 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: edgeStyle(pid, scene.id, C_PARAMETERS) },
         ...edgeLabels('parameters', C_PARAMETERS, onEdge),
       });
     }
@@ -142,8 +146,8 @@ export function buildWorkflowGraph(
         target: scene.id,
         targetHandle: 'script-in',
         type: 'smoothstep',
-        style: { stroke: C_SCRIPT, strokeWidth: 1.5, opacity: 0.7 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: C_SCRIPT },
+        style: { stroke: edgeStyle(sid, scene.id, C_SCRIPT), strokeWidth: 1.5, opacity: 0.7 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: edgeStyle(sid, scene.id, C_SCRIPT) },
         ...edgeLabels('script', C_SCRIPT, onEdge),
       });
     }
@@ -156,8 +160,8 @@ export function buildWorkflowGraph(
         target: scene.id,
         targetHandle: 'frames-in',
         type: 'smoothstep',
-        style: { stroke: C_FRAMES, strokeWidth: 1.5, opacity: 0.7 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: C_FRAMES },
+        style: { stroke: edgeStyle(fid, scene.id, C_FRAMES), strokeWidth: 1.5, opacity: 0.7 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: edgeStyle(fid, scene.id, C_FRAMES) },
         ...edgeLabels('frames', C_FRAMES, onEdge),
       });
     }
@@ -171,8 +175,8 @@ export function buildWorkflowGraph(
           target: scene.id,
           targetHandle: 'asset-in',
           type: 'smoothstep',
-          style: { stroke: C_ASSET, strokeWidth: 1.5, opacity: 0.75 },
-          markerEnd: { type: MarkerType.ArrowClosed, color: C_ASSET },
+          style: { stroke: edgeStyle(assetId, scene.id, C_ASSET), strokeWidth: 1.5, opacity: 0.75 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: edgeStyle(assetId, scene.id, C_ASSET) },
           ...edgeLabels('asset', C_ASSET, onEdge),
         });
       }
@@ -183,7 +187,7 @@ export function buildWorkflowGraph(
         id: oid,
         type: 'output',
         position: pos(oid),
-        data: { sceneId: scene.id, label: 'output' },
+        data: { sceneId: scene.id, label: 'output', workflowStyle: workflowStyle(oid) },
       });
 
       if (link(scene.id, oid)) {
@@ -196,16 +200,16 @@ export function buildWorkflowGraph(
           type: 'smoothstep',
           animated: scene.status === 'generating' || scene.status === 'regenerating' || scene.status === 'queued',
           style: {
-            stroke: scene.status === 'completed'
+            stroke: edgeStyle(scene.id, oid, scene.status === 'completed'
               ? C_OUTPUT_OK
               : scene.status === 'failed'
                 ? C_OUTPUT_FAIL
-                : C_OUTPUT_ACTIVE,
+                : C_OUTPUT_ACTIVE),
             strokeWidth: 2,
           },
           markerEnd: {
             type: MarkerType.ArrowClosed,
-            color: scene.status === 'completed' ? C_OUTPUT_OK : scene.status === 'failed' ? C_OUTPUT_FAIL : C_OUTPUT_ACTIVE,
+            color: edgeStyle(scene.id, oid, scene.status === 'completed' ? C_OUTPUT_OK : scene.status === 'failed' ? C_OUTPUT_FAIL : C_OUTPUT_ACTIVE),
           },
           ...edgeLabels('output', LABEL_FG, onEdge),
         });
@@ -223,8 +227,8 @@ export function buildWorkflowGraph(
         targetHandle: 'flow-in',
         type: 'smoothstep',
         animated: true,
-        style: { stroke: FLOW_STROKE, strokeWidth: 2 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: FLOW_STROKE },
+        style: { stroke: edgeStyle(scene.id, nextScene.id, FLOW_STROKE), strokeWidth: 2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: edgeStyle(scene.id, nextScene.id, FLOW_STROKE) },
         ...(onEdge && transition ? {
           label: transition,
           labelStyle: { fontSize: 10, fill: LABEL_FG },
@@ -241,7 +245,7 @@ export function buildWorkflowGraph(
       id: finalOutputNodeId,
       type: 'output',
       position: pos(finalOutputNodeId),
-      data: { final: true, label: 'final output' },
+      data: { final: true, label: 'final output', workflowStyle: workflowStyle(finalOutputNodeId) },
     });
 
     scenes.forEach((scene) => {
@@ -254,8 +258,8 @@ export function buildWorkflowGraph(
         target: finalOutputNodeId,
         targetHandle: 'output-in',
         type: 'smoothstep',
-        style: { stroke: C_OUTPUT_OK, strokeWidth: 2, opacity: 0.9 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: C_OUTPUT_OK },
+        style: { stroke: edgeStyle(oid, finalOutputNodeId, C_OUTPUT_OK), strokeWidth: 2, opacity: 0.9 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: edgeStyle(oid, finalOutputNodeId, C_OUTPUT_OK) },
         ...edgeLabels('timeline', C_OUTPUT_OK, onEdge),
       });
     });

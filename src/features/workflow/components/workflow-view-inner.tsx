@@ -112,6 +112,7 @@ export function WorkflowViewInner() {
   const sceneMap = useWorkflowStore((s) => s.sceneMap);
   const sceneOrder = useWorkflowStore((s) => s.sceneOrder);
   const nodePositions = useWorkflowStore((s) => s.nodePositions);
+  const nodeColorStyles = useWorkflowStore((s) => s.nodeColorStyles);
   const hiddenNodeIds = useWorkflowStore((s) => s.hiddenNodeIds);
   const shownOutputSceneIds = useWorkflowStore((s) => s.shownOutputSceneIds);
   const updateScene = useWorkflowStore((s) => s.updateScene);
@@ -175,8 +176,9 @@ export function WorkflowViewInner() {
       edgeLabelPlacement,
       hiddenNodeIds,
       currentProject?.creativePlan?.reusableAssets ?? [],
+      nodeColorStyles,
     ),
-    [graphKey, nodePositions, scenes, edgeLabelPlacement, hiddenNodeIds, currentProject?.creativePlan?.reusableAssets],
+    [graphKey, nodePositions, scenes, edgeLabelPlacement, hiddenNodeIds, currentProject?.creativePlan?.reusableAssets, nodeColorStyles],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(graphNodes);
@@ -226,6 +228,7 @@ export function WorkflowViewInner() {
         positions: { ...nodePositions, ...canvasPositions },
         hiddenNodes: Object.keys(hiddenNodeIds),
         shownOutputs: Object.keys(shownOutputSceneIds),
+        nodeColors: nodeColorStyles,
         viewport: viewport ?? null,
       },
       graph: {
@@ -233,7 +236,7 @@ export function WorkflowViewInner() {
         edges,
       },
     };
-  }, [currentProject, currentProjectId, edges, hiddenNodeIds, nodePositions, nodes, scenes, shownOutputSceneIds]);
+  }, [currentProject, currentProjectId, edges, hiddenNodeIds, nodeColorStyles, nodePositions, nodes, scenes, shownOutputSceneIds]);
 
   const handleExportWorkflow = useCallback((format: 'json' | 'xml') => {
     const snapshot = buildExportSnapshot();

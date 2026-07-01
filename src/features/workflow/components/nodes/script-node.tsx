@@ -21,9 +21,11 @@ const SECTIONS = [
   { key: 'details', label: 'Details' },
   { key: 'avoid', label: 'Avoid' },
 ] as const;
+type WorkflowStyle = { border?: string; line?: string };
 
 function ScriptNodeComponent({ data }: NodeProps) {
   const sceneId = (data as { sceneId: string }).sceneId;
+  const workflowStyle = (data as { workflowStyle?: WorkflowStyle }).workflowStyle;
   const scene = useWorkflowStore((s) => s.sceneMap[sceneId]);
   const updateScene = useWorkflowStore((s) => s.updateScene);
   const template = useScenePromptTemplate();
@@ -68,7 +70,10 @@ function ScriptNodeComponent({ data }: NodeProps) {
           className="!w-3 !h-3 !bg-violet-500 !border-2 !border-background"
         />
 
-        <div className="w-[220px] rounded-xl border border-border bg-card shadow-lg overflow-hidden">
+        <div
+          className="w-[220px] rounded-xl border border-border bg-card shadow-lg overflow-hidden"
+          style={workflowStyle?.border ? { borderColor: workflowStyle.border } : undefined}
+        >
           <div className="px-2.5 py-1.5 border-b border-border bg-muted/30 flex items-center justify-between">
             <span className="text-[9px] uppercase tracking-wider text-violet-400 font-semibold flex items-center gap-1">
               <FileText className="w-3 h-3" /> Script

@@ -12,9 +12,11 @@ import { storage } from '@/services/storage/indexeddb';
 import type { ReusableAssetPlan } from '@/core/types';
 
 const BRAND_KIT_STORAGE_KEY = 'videoforge-brandkits';
+type WorkflowStyle = { border?: string; line?: string };
 
 function AssetNodeComponent({ data }: NodeProps) {
   const asset = data as unknown as ReusableAssetPlan;
+  const workflowStyle = (data as unknown as { workflowStyle?: WorkflowStyle }).workflowStyle;
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
   const saveToProjectAssets = async () => {
@@ -74,7 +76,10 @@ function AssetNodeComponent({ data }: NodeProps) {
 
   return (
     <div className="relative">
-      <div className="w-[230px] rounded-xl border border-cyan-500/40 bg-card shadow-lg overflow-hidden">
+      <div
+        className="w-[230px] rounded-xl border border-cyan-500/40 bg-card shadow-lg overflow-hidden"
+        style={workflowStyle?.border ? { borderColor: workflowStyle.border } : undefined}
+      >
         <div className="px-2.5 py-1.5 border-b border-border bg-cyan-500/10 flex items-center justify-between gap-2">
           <span className="text-[9px] uppercase tracking-wider text-cyan-300 font-semibold flex items-center gap-1">
             <Box className="w-3 h-3" />

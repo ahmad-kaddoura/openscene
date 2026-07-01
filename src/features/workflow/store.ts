@@ -17,6 +17,7 @@ import {
   shouldShowOutputNode,
   allScenesReadyForFinalOutput,
   finalOutputNodeId,
+  type NodeColorStyles,
 } from './graph/workflow-layout';
 import { nodeIdsForScene, sceneIdFromNodeId } from './graph/workflow-node-utils';
 import { nodeIdForKind, type WorkflowNodeKind } from './graph/workflow-node-catalog';
@@ -50,6 +51,7 @@ function persistLayout(get: () => WorkflowState) {
     positions: get().nodePositions,
     hiddenNodes: Object.keys(get().hiddenNodeIds),
     shownOutputs: Object.keys(get().shownOutputSceneIds),
+    nodeColors: get().nodeColorStyles,
   });
 }
 
@@ -180,6 +182,7 @@ interface WorkflowState {
   sceneMap: Record<string, Scene>;
   sceneOrder: string[];
   nodePositions: Record<string, { x: number; y: number }>;
+  nodeColorStyles: NodeColorStyles;
   hiddenNodeIds: Record<string, true>;
   shownOutputSceneIds: Record<string, true>;
   layoutProjectId: string | null;
@@ -216,6 +219,8 @@ interface WorkflowState {
   // Layout
   loadLayoutForProject: (projectId: string) => void;
   setNodePosition: (nodeId: string, position: { x: number; y: number }) => void;
+  setNodeColorStyle: (nodeId: string, style: { border?: string; line?: string }) => void;
+  resetNodeColorStyle: (nodeId: string) => void;
   applyAutoLayout: () => void;
   getNodePositions: () => Record<string, { x: number; y: number }>;
 }
@@ -225,6 +230,7 @@ export const useWorkflowStore = create<WorkflowState>()(
     sceneMap: {},
     sceneOrder: [],
     nodePositions: {},
+    nodeColorStyles: {},
     hiddenNodeIds: {},
     shownOutputSceneIds: {},
     layoutProjectId: null,
@@ -725,6 +731,7 @@ export const useWorkflowStore = create<WorkflowState>()(
           return sc.id;
         });
         s.nodePositions = saved?.positions ?? {};
+        s.nodeColorStyles = saved?.nodeColors ?? {};
         s.hiddenNodeIds = Object.fromEntries(
           (saved?.hiddenNodes ?? []).map((id) => [id, true as const]),
         );
@@ -742,6 +749,7 @@ export const useWorkflowStore = create<WorkflowState>()(
       set((s) => {
         s.layoutProjectId = projectId;
         s.nodePositions = saved?.positions ?? {};
+        s.nodeColorStyles = saved?.nodeColors ?? {};
         s.hiddenNodeIds = Object.fromEntries(
           (saved?.hiddenNodes ?? []).map((id) => [id, true as const]),
         );
@@ -756,6 +764,23 @@ export const useWorkflowStore = create<WorkflowState>()(
     setNodePosition: (nodeId, position) => {
       set((s) => {
         s.nodePositions[nodeId] = position;
+      });
+      persistLayout(get);
+    },
+
+    setNodeColorStyle: (nodeId, style) => {
+      set((s) => {
+        s.nodeColorStyles[nodeId] = {
+          ...s.nodeColorStyles[nodeId],
+          ...style,
+        };
+      });
+      persistLayout(get);
+    },
+
+    resetNodeColorStyle: (nodeId) => {
+      set((s) => {
+        delete s.nodeColorStyles[nodeId];
       });
       persistLayout(get);
     },

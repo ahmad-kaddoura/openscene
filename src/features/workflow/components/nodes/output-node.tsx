@@ -122,7 +122,13 @@ async function loadOutputMediaInfo(url: string, isVideo: boolean): Promise<Outpu
   return { ...info, ...mediaInfo };
 }
 
-function SceneOutputNode({ sceneId }: { sceneId: string }) {
+function SceneOutputNode({
+  sceneId,
+  workflowStyle,
+}: {
+  sceneId: string;
+  workflowStyle?: { border?: string; line?: string };
+}) {
   const scene = useWorkflowStore((s) => s.sceneMap[sceneId]);
   const clearSceneOutput = useWorkflowStore((s) => s.clearSceneOutput);
   const retrySceneGeneration = useWorkflowStore((s) => s.retrySceneGeneration);
@@ -163,7 +169,7 @@ function SceneOutputNode({ sceneId }: { sceneId: string }) {
   const estimatedTotalMs = estimateSceneGenerationMs(scene);
   const elapsedMs = startedAt ? Math.max(0, now - startedAt) : 0;
   const remainingMs = startedAt ? Math.max(0, estimatedTotalMs - elapsedMs) : estimatedTotalMs;
-  const mediaInfo = loadedMediaInfo?.url === previewUrl ? loadedMediaInfo.info : null;
+  const mediaInfo = loadedMediaInfo && loadedMediaInfo.url === previewUrl ? loadedMediaInfo.info : null;
   const displayDuration = mediaInfo?.duration ?? scene.duration;
   const displayResolution = mediaInfo?.width && mediaInfo?.height
     ? `${mediaInfo.width}x${mediaInfo.height}`
@@ -194,7 +200,10 @@ function SceneOutputNode({ sceneId }: { sceneId: string }) {
         className="!w-3 !h-3 !bg-emerald-500 !border-2 !border-background"
       />
 
-      <div className={`w-[220px] rounded-xl border-2 ${borderClass} bg-card shadow-xl overflow-hidden`}>
+      <div
+        className={`w-[220px] rounded-xl border-2 ${borderClass} bg-card shadow-xl overflow-hidden`}
+        style={workflowStyle?.border ? { borderColor: workflowStyle.border } : undefined}
+      >
         <div className="px-2.5 py-1.5 border-b border-border bg-muted/30">
           <span className="text-[9px] uppercase tracking-wider text-emerald-400 font-semibold">Output</span>
         </div>
@@ -355,6 +364,7 @@ function DetailRow({ label, value, compact = false }: { label: string; value: st
 function OutputNodeComponent({ data }: NodeProps) {
   const final = Boolean((data as { final?: boolean }).final);
   const sceneId = (data as { sceneId?: string }).sceneId;
+  const workflowStyle = (data as { workflowStyle?: { border?: string; line?: string } }).workflowStyle;
   const sceneOrder = useWorkflowStore((s) => s.sceneOrder);
   const sceneMap = useWorkflowStore((s) => s.sceneMap);
   const scenes = useMemo(
@@ -367,7 +377,10 @@ function OutputNodeComponent({ data }: NodeProps) {
     return (
       <div className="relative">
         <Handle type="target" position={Position.Left} id="output-in" className="!w-3 !h-3 !bg-emerald-500 !border-2 !border-background" />
-        <div className="w-[240px] rounded-xl border-2 border-emerald-500/60 bg-card shadow-xl overflow-hidden">
+        <div
+          className="w-[240px] rounded-xl border-2 border-emerald-500/60 bg-card shadow-xl overflow-hidden"
+          style={workflowStyle?.border ? { borderColor: workflowStyle.border } : undefined}
+        >
           <div className="px-2.5 py-1.5 border-b border-border bg-muted/30">
             <span className="text-[9px] uppercase tracking-wider text-emerald-400 font-semibold">Final Output</span>
           </div>
@@ -395,7 +408,7 @@ function OutputNodeComponent({ data }: NodeProps) {
 
   if (!sceneId) return null;
 
-  return <SceneOutputNode sceneId={sceneId} />;
+  return <SceneOutputNode sceneId={sceneId} workflowStyle={workflowStyle} />;
 }
 
 export const OutputNode = memo(OutputNodeComponent);

@@ -12,6 +12,7 @@ import { AI_ACTIONS } from '../../lib/ai-actions';
 import { useWorkflowStore } from '@/features/workflow/store';
 import { useSettingsStore } from '@/features/settings/store';
 import type { Scene } from '@/core/types';
+type WorkflowStyle = { border?: string; line?: string };
 
 function PortLabel({ label, top, color, side }: { label: string; top: string; color: string; side: 'left' | 'right' }) {
   return (
@@ -30,6 +31,7 @@ function SceneNodeComponent({ data, id }: NodeProps) {
   const storedScene = useWorkflowStore((s) => s.sceneMap[id]);
   const fallback = data as unknown as Scene;
   const scene = storedScene ?? fallback;
+  const workflowStyle = (data as unknown as { workflowStyle?: WorkflowStyle }).workflowStyle;
   const generateScene = useWorkflowStore((s) => s.generateScene);
   const inNodeLabels = useSettingsStore((s) => (s.settings.edgeLabelPlacement ?? 'in-node') === 'in-node');
 
@@ -72,7 +74,10 @@ function SceneNodeComponent({ data, id }: NodeProps) {
         </>
       )}
 
-      <div className={`w-[240px] rounded-xl border-2 ${statusColors[scene.status] || 'border-border'} bg-card shadow-xl overflow-hidden`}>
+      <div
+        className={`w-[240px] rounded-xl border-2 ${statusColors[scene.status] || 'border-border'} bg-card shadow-xl overflow-hidden`}
+        style={workflowStyle?.border ? { borderColor: workflowStyle.border } : undefined}
+      >
         <div className="px-2.5 py-1.5 border-b border-border bg-muted/30 flex items-center justify-between">
           <span className="text-[9px] uppercase tracking-wider font-semibold text-foreground/80">Scene</span>
           <StatusBadge status={scene.status} />

@@ -8,9 +8,11 @@ import { CAMERA_MOVEMENTS, STYLE_PRESETS } from '@/core/config';
 import { useWorkflowStore } from '@/features/workflow/store';
 
 const ASPECT_RATIOS = ['9:16', '16:9', '1:1', '4:5', '21:9'];
+type WorkflowStyle = { border?: string; line?: string };
 
 function ParamsNodeComponent({ data }: NodeProps) {
   const sceneId = (data as { sceneId: string }).sceneId;
+  const workflowStyle = (data as { workflowStyle?: WorkflowStyle }).workflowStyle;
   const scene = useWorkflowStore((s) => s.sceneMap[sceneId]);
   const updateScene = useWorkflowStore((s) => s.updateScene);
 
@@ -25,7 +27,10 @@ function ParamsNodeComponent({ data }: NodeProps) {
         className="!w-3 !h-3 !bg-amber-500 !border-2 !border-background"
       />
 
-      <div className="w-[180px] rounded-xl border border-border bg-card shadow-lg overflow-hidden">
+      <div
+        className="w-[180px] rounded-xl border border-border bg-card shadow-lg overflow-hidden"
+        style={workflowStyle?.border ? { borderColor: workflowStyle.border } : undefined}
+      >
         <div className="px-2.5 py-1.5 border-b border-border bg-muted/30">
           <span className="text-[9px] uppercase tracking-wider text-amber-500 font-semibold">
             Parameters
