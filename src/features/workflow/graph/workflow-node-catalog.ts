@@ -1,6 +1,15 @@
-import { Clapperboard, SlidersHorizontal, FileText, Images, StickyNote, type LucideIcon } from 'lucide-react';
+import { Clapperboard, SlidersHorizontal, FileText, Images, StickyNote, WandSparkles, Video, ImageIcon, Pencil, type LucideIcon } from 'lucide-react';
 
-export type WorkflowNodeKind = 'scene' | 'parameters' | 'script' | 'frames' | 'note';
+export type WorkflowNodeKind =
+  | 'scene'
+  | 'parameters'
+  | 'script'
+  | 'frames'
+  | 'note'
+  | 'motion-control'
+  | 'reference-image'
+  | 'reference-video'
+  | 'motion-prompt';
 
 export type AddNodeOption = {
   kind: WorkflowNodeKind;
@@ -52,6 +61,38 @@ export const ADD_NODE_OPTIONS: AddNodeOption[] = [
     icon: StickyNote,
     color: 'text-yellow-300',
   },
+  {
+    kind: 'motion-control',
+    label: 'Motion Control',
+    description: 'Image + reference video + prompt → motion-controlled video',
+    keywords: ['motion', 'control', 'kling', 'image', 'video', 'reference', 'qwen'],
+    icon: WandSparkles,
+    color: 'text-sky-400',
+  },
+  {
+    kind: 'reference-image',
+    label: 'Reference Image',
+    description: 'Reusable image input for motion, style, or character reference',
+    keywords: ['reference', 'image', 'input', 'photo', 'motion'],
+    icon: ImageIcon,
+    color: 'text-sky-400',
+  },
+  {
+    kind: 'reference-video',
+    label: 'Reference Video',
+    description: 'Reusable video input for motion or timing reference',
+    keywords: ['reference', 'video', 'input', 'motion', 'kling'],
+    icon: Video,
+    color: 'text-orange-400',
+  },
+  {
+    kind: 'motion-prompt',
+    label: 'Motion Prompt',
+    description: 'Reusable optional prompt input for motion control',
+    keywords: ['motion', 'prompt', 'text', 'input', 'instruction'],
+    icon: Pencil,
+    color: 'text-purple-400',
+  },
 ];
 
 export function nodeIdForKind(kind: WorkflowNodeKind, sceneId: string): string {
@@ -66,6 +107,14 @@ export function nodeIdForKind(kind: WorkflowNodeKind, sceneId: string): string {
       return `frames-${sceneId}`;
     case 'note':
       return `note-${sceneId}`;
+    case 'motion-control':
+      return `motion-control-${sceneId}`;
+    case 'reference-image':
+      return `reference-image-${sceneId}`;
+    case 'reference-video':
+      return `reference-video-${sceneId}`;
+    case 'motion-prompt':
+      return `motion-prompt-${sceneId}`;
   }
 }
 

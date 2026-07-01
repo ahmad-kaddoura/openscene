@@ -16,6 +16,8 @@ import {
   type NodePositions,
   type NodeColorStyles,
   type WorkflowNote,
+  type WorkflowMotionControl,
+  type WorkflowMotionInput,
 } from './workflow-layout';
 
 export {
@@ -36,6 +38,10 @@ const C_PARAMETERS = '#eab308';
 const C_SCRIPT = '#a78bfa';
 const C_FRAMES = '#2dd4bf';
 const C_ASSET = '#22d3ee';
+const C_MOTION_IMAGE = '#38bdf8';
+const C_MOTION_VIDEO = '#f97316';
+const C_MOTION_PROMPT = '#c084fc';
+const C_MOTION_OUTPUT = '#22c55e';
 const C_OUTPUT_OK = '#22c55e';
 const C_OUTPUT_FAIL = '#ef4444';
 const C_OUTPUT_ACTIVE = '#3b82f6';
@@ -61,6 +67,8 @@ export function buildWorkflowGraph(
   reusableAssets: ReusableAssetPlan[] = [],
   nodeColorStyles: NodeColorStyles = {},
   notes: WorkflowNote[] = [],
+  motionControls: WorkflowMotionControl[] = [],
+  motionInputs: WorkflowMotionInput[] = [],
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -83,6 +91,72 @@ export function buildWorkflowGraph(
         width: note.width ?? 240,
         height: note.height ?? 170,
       },
+    });
+  });
+
+  motionInputs.forEach((input, idx) => {
+    if (!visible(input.id)) return;
+    const type = input.kind === 'reference-image'
+      ? 'motionImage'
+      : input.kind === 'reference-video'
+        ? 'motionVideo'
+        : 'motionPrompt';
+    nodes.push({
+      id: input.id,
+      type,
+      position: savedPositions?.[input.id] ?? { x: 80, y: 320 + idx * 190 },
+      data: { inputId: input.id, workflowStyle: workflowStyle(input.id) },
+    });
+  });
+
+  motionControls.forEach((motion, idx) => {
+    const ids = {
+      image: `motion-image-${motion.id}`,
+      video: `motion-video-${motion.id}`,
+      prompt: `motion-prompt-${motion.id}`,
+      control: `motion-control-${motion.id}`,
+    };
+    const base = savedPositions?.[ids.control] ?? { x: 80 + idx * 720, y: 340 };
+    const fallback = {
+      [ids.image]: { x: base.x - 280, y: base.y - 170 },
+      [ids.video]: { x: base.x - 280, y: base.y + 10 },
+      [ids.prompt]: { x: base.x - 280, y: base.y + 190 },
+      [ids.control]: base,
+    };
+
+    ([
+      [ids.image, 'motionImage'],
+      [ids.video, 'motionVideo'],
+      [ids.prompt, 'motionPrompt'],
+      [ids.control, 'motionControl'],
+    ] as const).forEach(([id, type]) => {
+      if (!visible(id)) return;
+      nodes.push({
+        id,
+        type,
+        position: savedPositions?.[id] ?? fallback[id],
+        data: { motionId: motion.id, workflowStyle: workflowStyle(id) },
+      });
+    });
+
+    [
+      [ids.image, 'motion-image-out', 'motion-image-in', 'reference image', C_MOTION_IMAGE],
+      [ids.video, 'motion-video-out', 'motion-video-in', 'reference video', C_MOTION_VIDEO],
+      [ids.prompt, 'motion-prompt-out', 'motion-prompt-in', 'prompt', C_MOTION_PROMPT],
+    ].forEach(([source, sourceHandle, targetHandle, label, color]) => {
+      if (!link(source, ids.control)) return;
+      edges.push({
+        id: `e-${source}-${ids.control}`,
+        source,
+        sourceHandle,
+        target: ids.control,
+        targetHandle,
+        type: 'smoothstep',
+        animated: motion.status === 'generating' || motion.status === 'queued',
+        style: { stroke: edgeStyle(source, ids.control, color), strokeWidth: 1.8, opacity: 0.82 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: edgeStyle(source, ids.control, color) },
+        ...edgeLabels(label, color, onEdge),
+      });
     });
   });
 

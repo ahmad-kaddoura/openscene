@@ -161,12 +161,40 @@ export type WorkflowNote = {
   height?: number;
 };
 
+export type MotionControlStatus = 'idle' | 'queued' | 'generating' | 'completed' | 'failed';
+
+export type WorkflowMotionControl = {
+  id: string;
+  title: string;
+  imageUrl?: string;
+  videoUrl?: string;
+  prompt?: string;
+  outputUrl?: string;
+  status: MotionControlStatus;
+  progress?: number;
+  taskId?: string;
+  model?: string;
+  error?: string;
+};
+
+export type WorkflowMotionInputKind = 'reference-image' | 'reference-video' | 'motion-prompt';
+
+export type WorkflowMotionInput = {
+  id: string;
+  kind: WorkflowMotionInputKind;
+  imageUrl?: string;
+  videoUrl?: string;
+  prompt?: string;
+};
+
 export type WorkflowLayout = {
   positions: NodePositions;
   hiddenNodes?: string[];
   shownOutputs?: string[];
   nodeColors?: NodeColorStyles;
   notes?: WorkflowNote[];
+  motionControls?: WorkflowMotionControl[];
+  motionInputs?: WorkflowMotionInput[];
 };
 
 function isLegacyPositions(value: unknown): value is NodePositions {
@@ -186,6 +214,8 @@ function normalizeLayout(raw: unknown): WorkflowLayout | null {
       shownOutputs: layout.shownOutputs ?? [],
       nodeColors: layout.nodeColors ?? {},
       notes: layout.notes ?? [],
+      motionControls: layout.motionControls ?? [],
+      motionInputs: layout.motionInputs ?? [],
     };
   }
   return null;

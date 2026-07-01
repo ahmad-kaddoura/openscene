@@ -312,6 +312,7 @@ export async function submitQwenVideoTask(
     prompt: string;
     startFrameUrl?: string;
     endFrameUrl?: string;
+    referenceVideoUrl?: string;
     model?: string;
   },
 ): Promise<{ taskId: string; model: string }> {
@@ -333,6 +334,9 @@ export async function submitQwenVideoTask(
         img_url: options.startFrameUrl,
         first_frame_url: options.startFrameUrl,
         last_frame_url: options.endFrameUrl,
+        video_url: options.referenceVideoUrl,
+        ref_video_url: options.referenceVideoUrl,
+        reference_video_url: options.referenceVideoUrl,
       },
       parameters: {
         resolution: '720P',
@@ -426,6 +430,7 @@ export async function callQwenVideoGeneration(
     prompt: string;
     startFrameUrl?: string;
     endFrameUrl?: string;
+    referenceVideoUrl?: string;
     model?: string;
   },
 ): Promise<{ url: string; model: string }> {

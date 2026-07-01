@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
       prompt: body.prompt,
       startFrameUrl: body.startFrameUrl,
       endFrameUrl: body.endFrameUrl,
+      referenceVideoUrl: body.referenceVideoUrl,
       model: config.videoModel,
     });
 

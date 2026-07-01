@@ -19,6 +19,8 @@ import {
   finalOutputNodeId,
   type NodeColorStyles,
   type WorkflowNote,
+  type WorkflowMotionControl,
+  type WorkflowMotionInput,
 } from './graph/workflow-layout';
 import { nodeIdsForScene, sceneIdFromNodeId } from './graph/workflow-node-utils';
 import { nodeIdForKind, type WorkflowNodeKind } from './graph/workflow-node-catalog';
@@ -54,6 +56,8 @@ function persistLayout(get: () => WorkflowState) {
     shownOutputs: Object.keys(get().shownOutputSceneIds),
     nodeColors: get().nodeColorStyles,
     notes: get().noteNodes,
+    motionControls: get().motionControls,
+    motionInputs: get().motionInputNodes,
   });
 }
 
@@ -188,6 +192,8 @@ interface WorkflowState {
   hiddenNodeIds: Record<string, true>;
   shownOutputSceneIds: Record<string, true>;
   noteNodes: WorkflowNote[];
+  motionControls: WorkflowMotionControl[];
+  motionInputNodes: WorkflowMotionInput[];
   layoutProjectId: string | null;
 
   // Scene CRUD
@@ -196,6 +202,9 @@ interface WorkflowState {
   removeScene: (id: string) => void;
   removeWorkflowNode: (nodeId: string) => void;
   updateNoteNode: (id: string, updates: Partial<Omit<WorkflowNote, 'id'>>) => void;
+  updateMotionControl: (id: string, updates: Partial<Omit<WorkflowMotionControl, 'id'>>) => void;
+  updateMotionInput: (id: string, updates: Partial<Omit<WorkflowMotionInput, 'id' | 'kind'>>) => void;
+  generateMotionControl: (id: string) => Promise<void>;
   updateScene: (id: string, updates: Partial<Scene>) => void;
   reorderScenes: (newOrder: string[]) => void;
   duplicateScene: (id: string) => void;
@@ -238,6 +247,8 @@ export const useWorkflowStore = create<WorkflowState>()(
     hiddenNodeIds: {},
     shownOutputSceneIds: {},
     noteNodes: [],
+    motionControls: [],
+    motionInputNodes: [],
     layoutProjectId: null,
     isGeneratingAll: false,
 
@@ -270,6 +281,45 @@ export const useWorkflowStore = create<WorkflowState>()(
         });
         persistLayout(get);
         return nodeId;
+      }
+
+      if (kind === 'motion-control') {
+        const id = nanoid();
+        const nodes = {
+          image: `motion-image-${id}`,
+          video: `motion-video-${id}`,
+          prompt: `motion-prompt-${id}`,
+          control: `motion-control-${id}`,
+        };
+        set((s) => {
+          s.motionControls.push({
+            id,
+            title: `Motion Control ${s.motionControls.length + 1}`,
+            prompt: '',
+            status: 'idle',
+            progress: 0,
+          });
+          s.nodePositions[nodes.image] = { x: position.x - 280, y: position.y - 170 };
+          s.nodePositions[nodes.video] = { x: position.x - 280, y: position.y + 10 };
+          s.nodePositions[nodes.prompt] = { x: position.x - 280, y: position.y + 190 };
+          s.nodePositions[nodes.control] = position;
+        });
+        persistLayout(get);
+        return nodes.control;
+      }
+
+      if (kind === 'reference-image' || kind === 'reference-video' || kind === 'motion-prompt') {
+        const id = `${kind}-${nanoid()}`;
+        set((s) => {
+          s.motionInputNodes.push({
+            id,
+            kind,
+            prompt: kind === 'motion-prompt' ? '' : undefined,
+          });
+          s.nodePositions[id] = position;
+        });
+        persistLayout(get);
+        return id;
       }
 
       let sid = sceneId;
@@ -323,6 +373,25 @@ export const useWorkflowStore = create<WorkflowState>()(
       set((s) => {
         if (nodeId.startsWith('note-')) {
           s.noteNodes = s.noteNodes.filter((note) => note.id !== nodeId);
+        } else if (
+          nodeId.startsWith('reference-image-') ||
+          nodeId.startsWith('reference-video-') ||
+          nodeId.startsWith('motion-prompt-')
+        ) {
+          s.motionInputNodes = s.motionInputNodes.filter((input) => input.id !== nodeId);
+        } else if (nodeId.startsWith('motion-')) {
+          const motionId = nodeId.replace(/^motion-(?:image|video|prompt|control)-/, '');
+          s.motionControls = s.motionControls.filter((motion) => motion.id !== motionId);
+          for (const id of [
+            `motion-image-${motionId}`,
+            `motion-video-${motionId}`,
+            `motion-prompt-${motionId}`,
+            `motion-control-${motionId}`,
+          ]) {
+            delete s.nodePositions[id];
+            delete s.nodeColorStyles[id];
+            delete s.hiddenNodeIds[id];
+          }
         } else {
           s.hiddenNodeIds[nodeId] = true;
         }
@@ -343,6 +412,97 @@ export const useWorkflowStore = create<WorkflowState>()(
         if (note) Object.assign(note, updates);
       });
       persistLayout(get);
+    },
+
+    updateMotionControl: (id, updates) => {
+      set((s) => {
+        const motion = s.motionControls.find((item) => item.id === id);
+        if (motion) Object.assign(motion, updates);
+      });
+      persistLayout(get);
+    },
+
+    updateMotionInput: (id, updates) => {
+      set((s) => {
+        const input = s.motionInputNodes.find((item) => item.id === id);
+        if (input) Object.assign(input, updates);
+      });
+      persistLayout(get);
+    },
+
+    generateMotionControl: async (id) => {
+      const motion = get().motionControls.find((item) => item.id === id);
+      if (!motion) return;
+      if (!motion.imageUrl || !motion.videoUrl) {
+        get().updateMotionControl(id, {
+          status: 'failed',
+          error: 'Add a reference image and reference video first.',
+          progress: 0,
+        });
+        return;
+      }
+
+      get().updateMotionControl(id, { status: 'queued', error: undefined, progress: 5, outputUrl: undefined });
+
+      try {
+        const submitResponse = await fetch('/api/generate-scene', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: motion.prompt?.trim() || 'Match the motion from the reference video while preserving the subject and composition from the reference image.',
+            startFrameUrl: motion.imageUrl,
+            referenceVideoUrl: motion.videoUrl,
+          }),
+        });
+
+        if (!submitResponse.ok) {
+          const data = await submitResponse.json().catch(() => ({}));
+          throw new Error(data.error || `Motion control submit failed (${submitResponse.status})`);
+        }
+
+        const submitted = await submitResponse.json();
+        const taskId = submitted.taskId as string | undefined;
+        const model = submitted.model as string | undefined;
+        if (!taskId) throw new Error('Motion control generation did not return a task id.');
+
+        get().updateMotionControl(id, { status: 'generating', taskId, model, progress: 12 });
+
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 5 * 60 * 1000) {
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          const elapsed = Date.now() - startedAt;
+          get().updateMotionControl(id, { progress: Math.min(97, Math.round(12 + (elapsed / 120000) * 80)) });
+
+          const params = new URLSearchParams({ taskId, ...(model ? { model } : {}) });
+          const pollResponse = await fetch(`/api/generate-scene?${params.toString()}`);
+          if (!pollResponse.ok) {
+            const data = await pollResponse.json().catch(() => ({}));
+            throw new Error(data.error || `Motion control polling failed (${pollResponse.status})`);
+          }
+
+          const status = await pollResponse.json();
+          if (status.status === 'succeeded') {
+            get().updateMotionControl(id, {
+              status: 'completed',
+              outputUrl: status.videoUrl,
+              model: status.model || model,
+              progress: 100,
+            });
+            return;
+          }
+          if (status.status === 'failed') {
+            throw new Error(status.error || 'Motion control generation failed.');
+          }
+        }
+
+        throw new Error('Motion control generation timed out after 5 minutes.');
+      } catch (error) {
+        get().updateMotionControl(id, {
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Motion control generation failed.',
+          progress: 0,
+        });
+      }
     },
 
     updateScene: (id, updates) => {
@@ -754,6 +914,8 @@ export const useWorkflowStore = create<WorkflowState>()(
       set((s) => {
         s.sceneMap = {};
         s.noteNodes = [];
+        s.motionControls = [];
+        s.motionInputNodes = [];
         s.sceneOrder = scenes.map((sc) => {
           s.sceneMap[sc.id] = sc;
           return sc.id;
@@ -775,6 +937,8 @@ export const useWorkflowStore = create<WorkflowState>()(
         s.nodePositions = saved?.positions ?? {};
         s.nodeColorStyles = saved?.nodeColors ?? {};
         s.noteNodes = saved?.notes ?? [];
+        s.motionControls = saved?.motionControls ?? [];
+        s.motionInputNodes = saved?.motionInputs ?? [];
         s.hiddenNodeIds = Object.fromEntries(
           (saved?.hiddenNodes ?? []).map((id) => [id, true as const]),
         );
@@ -794,6 +958,8 @@ export const useWorkflowStore = create<WorkflowState>()(
         s.nodePositions = saved?.positions ?? {};
         s.nodeColorStyles = saved?.nodeColors ?? {};
         s.noteNodes = saved?.notes ?? [];
+        s.motionControls = saved?.motionControls ?? [];
+        s.motionInputNodes = saved?.motionInputs ?? [];
         s.hiddenNodeIds = Object.fromEntries(
           (saved?.hiddenNodes ?? []).map((id) => [id, true as const]),
         );
@@ -835,8 +1001,17 @@ export const useWorkflowStore = create<WorkflowState>()(
       const positions = computeAutoLayout(scenes, reusableAssets);
       set((s) => {
         const notePositions = Object.fromEntries(
-          s.noteNodes
-            .map((note) => [note.id, s.nodePositions[note.id]] as const)
+          [
+            ...s.noteNodes.map((note) => note.id),
+            ...s.motionControls.flatMap((motion) => [
+              `motion-image-${motion.id}`,
+              `motion-video-${motion.id}`,
+              `motion-prompt-${motion.id}`,
+              `motion-control-${motion.id}`,
+            ]),
+            ...s.motionInputNodes.map((input) => input.id),
+          ]
+            .map((id) => [id, s.nodePositions[id]] as const)
             .filter(([, position]) => Boolean(position)),
         );
         s.nodePositions = { ...positions, ...notePositions };

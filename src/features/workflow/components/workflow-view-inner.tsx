@@ -37,6 +37,7 @@ import { ScriptNode } from './nodes/script-node';
 import { FramesNode } from './nodes/frames-node';
 import { AssetNode } from './nodes/asset-node';
 import { NoteNode } from './nodes/note-node';
+import { MotionControlNode, MotionImageNode, MotionPromptNode, MotionVideoNode } from './nodes/motion-control-nodes';
 import { buildWorkflowGraph } from '../graph/workflow-graph';
 import { useWorkflowNodeContextMenu } from './menus/node-context-menu';
 import { useWorkflowPaneMenu } from './menus/pane-menu';
@@ -50,6 +51,10 @@ const nodeTypes: NodeTypes = {
   frames: FramesNode,
   asset: AssetNode,
   note: NoteNode,
+  motionImage: MotionImageNode,
+  motionVideo: MotionVideoNode,
+  motionPrompt: MotionPromptNode,
+  motionControl: MotionControlNode,
 };
 
 const backgroundVariantMap = {
@@ -124,6 +129,8 @@ export function WorkflowViewInner() {
   const hiddenNodeIds = useWorkflowStore((s) => s.hiddenNodeIds);
   const shownOutputSceneIds = useWorkflowStore((s) => s.shownOutputSceneIds);
   const noteNodes = useWorkflowStore((s) => s.noteNodes);
+  const motionControls = useWorkflowStore((s) => s.motionControls);
+  const motionInputNodes = useWorkflowStore((s) => s.motionInputNodes);
   const updateScene = useWorkflowStore((s) => s.updateScene);
   const generateAllScenes = useWorkflowStore((s) => s.generateAllScenes);
   const isGeneratingAll = useWorkflowStore((s) => s.isGeneratingAll);
@@ -189,8 +196,10 @@ export function WorkflowViewInner() {
       currentProject?.creativePlan?.reusableAssets ?? [],
       nodeColorStyles,
       noteNodes,
+      motionControls,
+      motionInputNodes,
     ),
-    [graphKey, nodePositions, scenes, edgeLabelPlacement, hiddenNodeIds, currentProject?.creativePlan?.reusableAssets, nodeColorStyles, noteNodes],
+    [graphKey, nodePositions, scenes, edgeLabelPlacement, hiddenNodeIds, currentProject?.creativePlan?.reusableAssets, nodeColorStyles, noteNodes, motionControls, motionInputNodes],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(graphNodes);
@@ -236,6 +245,8 @@ export function WorkflowViewInner() {
       project: currentProject ?? null,
       scenes,
       notes: noteNodes,
+      motionControls,
+      motionInputs: motionInputNodes,
       reusableAssets: currentProject?.creativePlan?.reusableAssets ?? [],
       layout: {
         positions: { ...nodePositions, ...canvasPositions },
@@ -249,7 +260,7 @@ export function WorkflowViewInner() {
         edges,
       },
     };
-  }, [currentProject, currentProjectId, edges, hiddenNodeIds, nodeColorStyles, nodePositions, nodes, noteNodes, scenes, shownOutputSceneIds]);
+  }, [currentProject, currentProjectId, edges, hiddenNodeIds, motionControls, motionInputNodes, nodeColorStyles, nodePositions, nodes, noteNodes, scenes, shownOutputSceneIds]);
 
   const handleExportWorkflow = useCallback((format: 'json' | 'xml') => {
     const snapshot = buildExportSnapshot();
@@ -317,6 +328,10 @@ export function WorkflowViewInner() {
               if (node.type === 'frames') return 'hsl(173 58% 45%)';
               if (node.type === 'asset') return 'hsl(188 86% 53%)';
               if (node.type === 'note') return 'hsl(48 96% 53%)';
+              if (node.type === 'motionImage') return 'hsl(199 89% 48%)';
+              if (node.type === 'motionVideo') return 'hsl(24 95% 53%)';
+              if (node.type === 'motionPrompt') return 'hsl(271 91% 65%)';
+              if (node.type === 'motionControl') return 'hsl(142 71% 45%)';
               return 'hsl(var(--primary))';
             }}
             nodeBorderRadius={8}
