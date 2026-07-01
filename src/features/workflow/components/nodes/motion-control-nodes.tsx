@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -175,28 +175,105 @@ function MotionControlNodeComponent({ id, data }: NodeProps) {
       <PortLabel label="image" side="left" top="24%" color="#38bdf8" />
       <PortLabel label="video" side="left" top="44%" color="#f97316" />
       <PortLabel label="prompt" side="left" top="64%" color="#c084fc" />
-      <PortLabel label="video out" side="right" top="84%" color="#22c55e" />
+      <PortLabel label="video out" side="right" top="50%" color="#22c55e" />
       <div className="w-[260px] overflow-hidden rounded-xl border-2 border-sky-500/45 bg-card shadow-xl" style={workflowStyle?.border ? { borderColor: workflowStyle.border } : undefined}>
         <Header icon={<WandSparkles className="h-3 w-3" />} label={motion.title} color="text-sky-400" />
         <div className="space-y-2 p-3">
-          {motion.outputUrl ? (
-            <video src={motion.outputUrl} controls className="w-full rounded-md border border-border" poster={motion.imageUrl} />
-          ) : (
-            <div className="flex min-h-[120px] items-center justify-center rounded-md border border-dashed border-border bg-muted/20">
-              <Empty icon={busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <WandSparkles className="h-5 w-5" />} text={busy ? `Generating ${motion.progress ?? 0}%` : 'Motion output'} />
+          <InputStatus label="Image" ready={Boolean(motion.imageUrl)} />
+          <InputStatus label="Video" ready={Boolean(motion.videoUrl)} />
+          <InputStatus label="Prompt" ready={Boolean(motion.prompt?.trim())} optional />
+          {motion.error && <p className="text-[10px] leading-relaxed text-red-400">{motion.error}</p>}
+          {busy && (
+            <div className="space-y-1 rounded-md border border-border bg-muted/20 p-2 text-[10px] text-muted-foreground">
+              <div className="flex justify-between"><span>Progress</span><span>{motion.progress ?? 0}%</span></div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-sky-500" style={{ width: `${Math.min(100, motion.progress ?? 0)}%` }} />
+              </div>
             </div>
           )}
-          {motion.error && <p className="text-[10px] leading-relaxed text-red-400">{motion.error}</p>}
+          {motion.outputUrl && (
+            <video src={motion.outputUrl} controls className="w-full rounded-md border border-border" poster={motion.imageUrl} />
+          )}
           <Button size="sm" className="h-8 w-full gap-1.5 text-xs" disabled={busy || !motion.imageUrl || !motion.videoUrl} onClick={() => generateMotionControl(motion.id)}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            {motion.outputUrl ? 'Regenerate Motion Video' : 'Generate Motion Video'}
+            {busy && motion.taskId && !motion.outputUrl
+              ? 'Resuming…'
+              : motion.outputUrl
+                ? 'Regenerate Motion Video'
+                : 'Generate Motion Video'}
           </Button>
           {motion.model && <p className="text-[9px] text-muted-foreground">Model: {motion.model}</p>}
         </div>
       </div>
-      <Handle type="source" position={Position.Right} id="motion-output-out" className="!h-3 !w-3 !border-2 !border-background !bg-emerald-500" style={{ top: '88%' }} />
+      <Handle type="source" position={Position.Right} id="motion-output-out" className="!h-3 !w-3 !border-2 !border-background !bg-emerald-500" style={{ top: '50%' }} />
     </div>
   );
+}
+
+function MotionOutputNodeComponent({ id, data }: NodeProps) {
+  const { motion, workflowStyle } = useMotion(id, data);
+  const [now, setNow] = useState(() => Date.now());
+  const busy = motion?.status === 'queued' || motion?.status === 'generating';
+  const startedAt = motion?.generationStartedAt ? new Date(motion.generationStartedAt).getTime() : null;
+  const elapsedMs = startedAt ? Math.max(0, now - startedAt) : 0;
+  const estimateMs = 120_000;
+  const remainingMs = busy ? Math.max(0, estimateMs - elapsedMs) : 0;
+
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
+
+  if (!motion) return null;
+
+  return (
+    <div className="relative">
+      <Handle type="target" position={Position.Left} id="motion-output-in" className="!h-3 !w-3 !border-2 !border-background !bg-emerald-500" />
+      <PortLabel label="video in" side="left" top="50%" color="#22c55e" />
+      <div className="w-[260px] overflow-hidden rounded-xl border-2 border-emerald-500/45 bg-card shadow-xl" style={workflowStyle?.border ? { borderColor: workflowStyle.border } : undefined}>
+        <Header icon={<Video className="h-3 w-3" />} label="Motion Output" color="text-emerald-400" />
+        <div className="space-y-2 p-3">
+          {motion.outputUrl ? (
+            <video src={motion.outputUrl} controls className="w-full rounded-md border border-border" poster={motion.imageUrl} />
+          ) : (
+            <div className="flex min-h-[130px] items-center justify-center rounded-md border border-dashed border-border bg-muted/20">
+              <Empty icon={busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Video className="h-5 w-5" />} text={busy ? `Generating ${motion.progress ?? 0}%` : 'No output yet'} />
+            </div>
+          )}
+          {busy && (
+            <div className="space-y-1 rounded-md border border-border bg-muted/20 p-2 text-[10px] text-muted-foreground">
+              <div className="flex justify-between"><span>Elapsed</span><span>{formatDuration(elapsedMs)}</span></div>
+              <div className="flex justify-between"><span>Remaining</span><span>{formatDuration(remainingMs)}</span></div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(100, motion.progress ?? 0)}%` }} />
+              </div>
+            </div>
+          )}
+          {motion.status === 'failed' && motion.error && <p className="text-[10px] leading-relaxed text-red-400">{motion.error}</p>}
+          {motion.model && <p className="text-[9px] text-muted-foreground">Model: {motion.model}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InputStatus({ label, ready, optional = false }: { label: string; ready: boolean; optional?: boolean }) {
+  return (
+    <div className="flex items-center justify-between rounded-md border border-border bg-muted/20 px-2 py-1.5 text-[10px]">
+      <span className="text-muted-foreground">{label}{optional ? ' (optional)' : ''}</span>
+      <span className={ready ? 'text-emerald-400' : optional ? 'text-muted-foreground' : 'text-red-400'}>
+        {ready ? 'Connected' : optional ? 'Empty' : 'Missing'}
+      </span>
+    </div>
+  );
+}
+
+function formatDuration(ms: number) {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return min > 0 ? `${min}m ${sec}s` : `${sec}s`;
 }
 
 function PortLabel({ label, side, top, color }: { label: string; side: 'left' | 'right'; top: string; color: string }) {
@@ -228,3 +305,4 @@ export const ImageInputNode = memo(ImageInputNodeComponent);
 export const VideoInputNode = memo(VideoInputNodeComponent);
 export const PromptInputNode = memo(PromptInputNodeComponent);
 export const MotionControlNode = memo(MotionControlNodeComponent);
+export const MotionOutputNode = memo(MotionOutputNodeComponent);

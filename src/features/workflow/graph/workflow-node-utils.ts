@@ -38,6 +38,7 @@ export function nodeLabel(nodeType: string | undefined): string {
     case 'videoInput': return 'Video Input';
     case 'promptInput': return 'Prompt Input';
     case 'motionControl': return 'Motion Control';
+    case 'motionOutput': return 'Motion Output';
     default: return 'Node';
   }
 }

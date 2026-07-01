@@ -41,9 +41,10 @@ export default function Home() {
     if (currentProjectId) {
       loadMessages(currentProjectId);
       const project = getCurrentProject();
-      if (project?.storyboard?.scenes?.length) {
-        void useWorkflowStore.getState().hydrateFromProject(currentProjectId, project.storyboard.scenes);
-      }
+      void useWorkflowStore.getState().hydrateFromProject(
+        currentProjectId,
+        project?.storyboard?.scenes ?? [],
+      );
     }
   }, [currentProjectId, loadMessages, getCurrentProject]);
 

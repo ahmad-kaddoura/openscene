@@ -207,11 +207,128 @@ export async function callQwenImageGeneration(
   return { url: imageUrl, model };
 }
 
+export const MOTION_CONTROL_MODEL = 'wan2.2-animate-move';
+
 function dashScopeBaseUrl(baseUrl: string): string {
   return baseUrl
     .replace(/\/compatible-mode\/v1\/?$/, '')
     .replace(/\/v1\/?$/, '')
     .replace(/\/$/, '');
+}
+
+function dataUrlByteSize(dataUrl: string): number {
+  const comma = dataUrl.indexOf(',');
+  if (comma === -1) return dataUrl.length;
+  const base64 = dataUrl.slice(comma + 1);
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+async function uploadDataUrlToDashScope(
+  config: QwenConfig,
+  dataUrl: string,
+  model: string,
+): Promise<string> {
+  const match = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
+  if (!match) {
+    throw {
+      kind: 'api',
+      status: 400,
+      message: 'Invalid media data URL. Re-upload the file and try again.',
+    } satisfies QwenCallError;
+  }
+
+  const mimeType = match[1];
+  const base64 = match[2];
+  const buffer = Buffer.from(base64, 'base64');
+  const ext = mimeType.split('/')[1]?.split('+')[0] || 'bin';
+  const fileName = `motion-${Date.now()}.${ext}`;
+
+  const base = dashScopeBaseUrl(config.baseUrl);
+  const policyUrl = `${base}/api/v1/uploads?action=getPolicy&model=${encodeURIComponent(model)}`;
+  const policyRes = await fetch(policyUrl, {
+    headers: { Authorization: `Bearer ${config.apiKey}` },
+  });
+
+  if (!policyRes.ok) {
+    const body = await policyRes.text().catch(() => '');
+    throw {
+      kind: policyRes.status === 401 || policyRes.status === 403 ? 'auth' : 'api',
+      status: policyRes.status,
+      message: body.slice(0, 500) || `DashScope upload policy error ${policyRes.status}`,
+    } satisfies QwenCallError;
+  }
+
+  const policyData = (await policyRes.json())?.data;
+  if (!policyData?.upload_host || !policyData?.upload_dir) {
+    throw {
+      kind: 'api',
+      status: 502,
+      message: 'DashScope upload policy returned incomplete credentials.',
+    } satisfies QwenCallError;
+  }
+
+  const key = `${policyData.upload_dir}/${fileName}`;
+  const form = new FormData();
+  form.append('OSSAccessKeyId', policyData.oss_access_key_id);
+  form.append('Signature', policyData.signature);
+  form.append('policy', policyData.policy);
+  form.append('x-oss-object-acl', policyData.x_oss_object_acl);
+  form.append('x-oss-forbid-overwrite', policyData.x_oss_forbid_overwrite);
+  form.append('key', key);
+  form.append('success_action_status', '200');
+  form.append('x-oss-content-type', mimeType);
+  form.append('file', new Blob([buffer], { type: mimeType }), fileName);
+
+  const uploadRes = await fetch(policyData.upload_host, { method: 'POST', body: form });
+  if (!uploadRes.ok) {
+    const body = await uploadRes.text().catch(() => '');
+    throw {
+      kind: 'api',
+      status: uploadRes.status,
+      message: body.slice(0, 500) || `DashScope media upload failed (${uploadRes.status})`,
+    } satisfies QwenCallError;
+  }
+
+  return `oss://${key}`;
+}
+
+export async function resolveDashScopeMediaUrl(
+  config: QwenConfig,
+  url: string,
+  model: string,
+): Promise<string> {
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('oss://')) {
+    return url;
+  }
+
+  if (url.startsWith('data:')) {
+    const isImage = url.startsWith('data:image/');
+    const sizeBytes = dataUrlByteSize(url);
+    if (isImage && sizeBytes <= 7 * 1024 * 1024) {
+      return url;
+    }
+    return uploadDataUrlToDashScope(config, url, model);
+  }
+
+  throw {
+    kind: 'api',
+    status: 400,
+    message: 'Media must be a public http(s) URL or an uploaded file.',
+  } satisfies QwenCallError;
+}
+
+function dashScopeHeaders(
+  config: QwenConfig,
+  options?: { async?: boolean; ossResolve?: boolean },
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${config.apiKey}`,
+  };
+  if (options?.async) headers['X-DashScope-Async'] = 'enable';
+  if (options?.ossResolve) headers['X-DashScope-OssResourceResolve'] = 'enable';
+  return headers;
 }
 
 async function callDashScopeImageSynthesis(
@@ -313,6 +430,7 @@ export async function submitQwenVideoTask(
     startFrameUrl?: string;
     endFrameUrl?: string;
     referenceVideoUrl?: string;
+    promptExtend?: boolean;
     model?: string;
   },
 ): Promise<{ taskId: string; model: string }> {
@@ -340,7 +458,7 @@ export async function submitQwenVideoTask(
       },
       parameters: {
         resolution: '720P',
-        prompt_extend: true,
+        prompt_extend: options.promptExtend ?? true,
       },
     }),
   });
@@ -361,6 +479,62 @@ export async function submitQwenVideoTask(
       kind: 'api',
       status: 502,
       message: 'DashScope video synthesis returned no task id.',
+    } satisfies QwenCallError;
+  }
+
+  return { taskId, model };
+}
+
+export async function submitQwenMotionControlTask(
+  config: QwenConfig,
+  options: {
+    imageUrl: string;
+    videoUrl: string;
+    mode?: 'wan-std' | 'wan-pro';
+    model?: string;
+  },
+): Promise<{ taskId: string; model: string }> {
+  const base = dashScopeBaseUrl(config.baseUrl);
+  const submitUrl = `${base}/api/v1/services/aigc/image2video/video-synthesis`;
+  const model = options.model || MOTION_CONTROL_MODEL;
+
+  const imageUrl = await resolveDashScopeMediaUrl(config, options.imageUrl, model);
+  const videoUrl = await resolveDashScopeMediaUrl(config, options.videoUrl, model);
+  const needsOssResolve = imageUrl.startsWith('oss://') || videoUrl.startsWith('oss://');
+
+  const submit = await fetch(submitUrl, {
+    method: 'POST',
+    headers: dashScopeHeaders(config, { async: true, ossResolve: needsOssResolve }),
+    body: JSON.stringify({
+      model,
+      input: {
+        image_url: imageUrl,
+        video_url: videoUrl,
+      },
+      parameters: {
+        // wan-pro is the higher-fidelity mode (closer to Kling-level motion
+        // transfer quality); wan-std trades quality for speed/cost.
+        mode: options.mode || 'wan-pro',
+      },
+    }),
+  });
+
+  if (!submit.ok) {
+    const body = await submit.text().catch(() => '');
+    throw {
+      kind: submit.status === 401 || submit.status === 403 ? 'auth' : 'api',
+      status: submit.status,
+      message: body.slice(0, 500) || `DashScope motion control error ${submit.status}`,
+    } satisfies QwenCallError;
+  }
+
+  const submitted = await submit.json();
+  const taskId = submitted?.output?.task_id || submitted?.task_id;
+  if (!taskId) {
+    throw {
+      kind: 'api',
+      status: 502,
+      message: 'DashScope motion control returned no task id.',
     } satisfies QwenCallError;
   }
 
@@ -399,7 +573,15 @@ export async function pollQwenVideoTask(
   const taskStatus = data?.output?.task_status;
 
   if (taskStatus === 'SUCCEEDED') {
-    const videoUrl = data?.output?.video_url || data?.output?.results?.[0]?.url || data?.output?.result_url;
+    // `results` is an array for most models (e.g. wan2.1-i2v) but a single
+    // object for motion-transfer models like wan2.2-animate-move.
+    const results = data?.output?.results;
+    const firstResult = Array.isArray(results) ? results[0] : results;
+    const videoUrl =
+      data?.output?.video_url ||
+      firstResult?.video_url ||
+      firstResult?.url ||
+      data?.output?.result_url;
     if (!videoUrl) {
       throw {
         kind: 'api',
@@ -431,6 +613,7 @@ export async function callQwenVideoGeneration(
     startFrameUrl?: string;
     endFrameUrl?: string;
     referenceVideoUrl?: string;
+    promptExtend?: boolean;
     model?: string;
   },
 ): Promise<{ url: string; model: string }> {

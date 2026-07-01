@@ -26,7 +26,45 @@ import { nodeIdsForScene, sceneIdFromNodeId } from './graph/workflow-node-utils'
 import { nodeIdForKind, type WorkflowNodeKind } from './graph/workflow-node-catalog';
 
 const generationAbortControllers = new Map<string, AbortController>();
+const activeMotionPolls = new Set<string>();
 let batchGenerationCancelled = false;
+
+async function pollMotionControlTask(
+  id: string,
+  taskId: string,
+  model: string | undefined,
+  updateMotionControl: (id: string, updates: Partial<Omit<WorkflowMotionControl, 'id'>>) => void,
+  generationStartedAt?: string,
+): Promise<{ videoUrl: string; model?: string }> {
+  const startedAt = generationStartedAt
+    ? new Date(generationStartedAt).getTime()
+    : Date.now();
+  const timeoutMs = 10 * 60 * 1000;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const elapsed = Date.now() - startedAt;
+    updateMotionControl(id, { progress: Math.min(97, Math.round(12 + (elapsed / 180000) * 80)) });
+
+    const params = new URLSearchParams({ taskId, ...(model ? { model } : {}) });
+    const pollResponse = await fetch(`/api/generate-scene?${params.toString()}`);
+    if (!pollResponse.ok) {
+      const data = await pollResponse.json().catch(() => ({}));
+      throw new Error(data.error || `Motion control polling failed (${pollResponse.status})`);
+    }
+
+    const status = await pollResponse.json();
+    if (status.status === 'succeeded') {
+      if (!status.videoUrl) throw new Error('Motion control succeeded but returned no video URL.');
+      return { videoUrl: status.videoUrl, model: status.model || model };
+    }
+    if (status.status === 'failed') {
+      throw new Error(status.error || 'Motion control generation failed.');
+    }
+  }
+
+  throw new Error('Motion control generation timed out after 10 minutes.');
+}
 
 function registerGenerationAbortController(sceneId: string): AbortController {
   const existing = generationAbortControllers.get(sceneId);
@@ -184,6 +222,7 @@ function recalcSceneTiming(s: { sceneOrder: string[]; sceneMap: Record<string, S
   });
 }
 
+
 interface WorkflowState {
   sceneMap: Record<string, Scene>;
   sceneOrder: string[];
@@ -204,7 +243,7 @@ interface WorkflowState {
   updateNoteNode: (id: string, updates: Partial<Omit<WorkflowNote, 'id'>>) => void;
   updateMotionControl: (id: string, updates: Partial<Omit<WorkflowMotionControl, 'id'>>) => void;
   updateInputNode: (id: string, updates: Partial<Omit<WorkflowInput, 'id' | 'kind'>>) => void;
-  generateMotionControl: (id: string) => Promise<void>;
+  generateMotionControl: (id: string, options?: { resume?: boolean }) => Promise<void>;
   updateScene: (id: string, updates: Partial<Scene>) => void;
   reorderScenes: (newOrder: string[]) => void;
   duplicateScene: (id: string) => void;
@@ -216,6 +255,7 @@ interface WorkflowState {
   clearSceneOutput: (id: string) => Promise<void>;
   retrySceneGeneration: (id: string) => Promise<void>;
   resumePendingGenerations: () => Promise<void>;
+  resumePendingMotionControls: () => Promise<void>;
   cancelAllGenerations: () => Promise<void>;
   isGeneratingAll: boolean;
 
@@ -290,6 +330,7 @@ export const useWorkflowStore = create<WorkflowState>()(
           video: `motion-video-${id}`,
           prompt: `motion-prompt-${id}`,
           control: `motion-control-${id}`,
+          output: `motion-output-${id}`,
         };
         set((s) => {
           s.motionControls.push({
@@ -303,6 +344,7 @@ export const useWorkflowStore = create<WorkflowState>()(
           s.nodePositions[nodes.video] = { x: position.x - 280, y: position.y + 10 };
           s.nodePositions[nodes.prompt] = { x: position.x - 280, y: position.y + 190 };
           s.nodePositions[nodes.control] = position;
+          s.nodePositions[nodes.output] = { x: position.x + 340, y: position.y };
         });
         persistLayout(get);
         return nodes.control;
@@ -395,6 +437,11 @@ export const useWorkflowStore = create<WorkflowState>()(
           const motion = s.motionControls.find((item) => item.id === motionId);
           if (motion) motion.prompt = '';
           s.hiddenNodeIds[nodeId] = true;
+        } else if (nodeId.startsWith('motion-output-')) {
+          const motionId = nodeId.slice('motion-output-'.length);
+          const motion = s.motionControls.find((item) => item.id === motionId);
+          if (motion) motion.outputUrl = undefined;
+          s.hiddenNodeIds[nodeId] = true;
         } else if (nodeId.startsWith('motion-control-')) {
           const motionId = nodeId.replace(/^motion-(?:image|video|prompt|control)-/, '');
           s.motionControls = s.motionControls.filter((motion) => motion.id !== motionId);
@@ -403,6 +450,7 @@ export const useWorkflowStore = create<WorkflowState>()(
             `motion-video-${motionId}`,
             `motion-prompt-${motionId}`,
             `motion-control-${motionId}`,
+            `motion-output-${motionId}`,
           ]) {
             delete s.nodePositions[id];
             delete s.nodeColorStyles[id];
@@ -446,78 +494,98 @@ export const useWorkflowStore = create<WorkflowState>()(
       persistLayout(get);
     },
 
-    generateMotionControl: async (id) => {
+    generateMotionControl: async (id, options) => {
       const motion = get().motionControls.find((item) => item.id === id);
       if (!motion) return;
-      if (!motion.imageUrl || !motion.videoUrl) {
+
+      let isResume = options?.resume === true;
+      if (
+        !isResume &&
+        (motion.status === 'generating' || motion.status === 'queued') &&
+        motion.taskId &&
+        !motion.outputUrl
+      ) {
+        isResume = true;
+      }
+
+      if (activeMotionPolls.has(id)) return;
+
+      if (!isResume) {
+        if (!motion.imageUrl || !motion.videoUrl) {
+          get().updateMotionControl(id, {
+            status: 'failed',
+            error: 'Add a reference image and reference video first.',
+            progress: 0,
+          });
+          return;
+        }
+
         get().updateMotionControl(id, {
-          status: 'failed',
-          error: 'Add a reference image and reference video first.',
-          progress: 0,
+          status: 'queued',
+          error: undefined,
+          progress: 5,
+          outputUrl: undefined,
+          generationStartedAt: new Date().toISOString(),
         });
+      } else if (!motion.taskId) {
+        get().updateMotionControl(id, { status: 'idle', progress: 0 });
         return;
       }
 
-      get().updateMotionControl(id, { status: 'queued', error: undefined, progress: 5, outputUrl: undefined });
+      activeMotionPolls.add(id);
 
       try {
-        const submitResponse = await fetch('/api/generate-scene', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt: motion.prompt?.trim() || 'Match the motion from the reference video while preserving the subject and composition from the reference image.',
-            startFrameUrl: motion.imageUrl,
-            referenceVideoUrl: motion.videoUrl,
-          }),
+        let taskId = motion.taskId;
+        let model = motion.model;
+
+        if (!isResume) {
+          const submitResponse = await fetch('/api/generate-scene', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              startFrameUrl: motion.imageUrl,
+              referenceVideoUrl: motion.videoUrl,
+              motionControl: true,
+            }),
+          });
+
+          if (!submitResponse.ok) {
+            const data = await submitResponse.json().catch(() => ({}));
+            throw new Error(data.error || `Motion control submit failed (${submitResponse.status})`);
+          }
+
+          const submitted = await submitResponse.json();
+          taskId = submitted.taskId as string | undefined;
+          model = submitted.model as string | undefined;
+          if (!taskId) throw new Error('Motion control generation did not return a task id.');
+
+          get().updateMotionControl(id, { status: 'generating', taskId, model, progress: 12 });
+        } else {
+          get().updateMotionControl(id, { status: 'generating', error: undefined });
+        }
+
+        const result = await pollMotionControlTask(
+          id,
+          taskId!,
+          model,
+          get().updateMotionControl,
+          isResume ? motion.generationStartedAt : undefined,
+        );
+
+        get().updateMotionControl(id, {
+          status: 'completed',
+          outputUrl: result.videoUrl,
+          model: result.model || model,
+          progress: 100,
         });
-
-        if (!submitResponse.ok) {
-          const data = await submitResponse.json().catch(() => ({}));
-          throw new Error(data.error || `Motion control submit failed (${submitResponse.status})`);
-        }
-
-        const submitted = await submitResponse.json();
-        const taskId = submitted.taskId as string | undefined;
-        const model = submitted.model as string | undefined;
-        if (!taskId) throw new Error('Motion control generation did not return a task id.');
-
-        get().updateMotionControl(id, { status: 'generating', taskId, model, progress: 12 });
-
-        const startedAt = Date.now();
-        while (Date.now() - startedAt < 5 * 60 * 1000) {
-          await new Promise((resolve) => setTimeout(resolve, 2500));
-          const elapsed = Date.now() - startedAt;
-          get().updateMotionControl(id, { progress: Math.min(97, Math.round(12 + (elapsed / 120000) * 80)) });
-
-          const params = new URLSearchParams({ taskId, ...(model ? { model } : {}) });
-          const pollResponse = await fetch(`/api/generate-scene?${params.toString()}`);
-          if (!pollResponse.ok) {
-            const data = await pollResponse.json().catch(() => ({}));
-            throw new Error(data.error || `Motion control polling failed (${pollResponse.status})`);
-          }
-
-          const status = await pollResponse.json();
-          if (status.status === 'succeeded') {
-            get().updateMotionControl(id, {
-              status: 'completed',
-              outputUrl: status.videoUrl,
-              model: status.model || model,
-              progress: 100,
-            });
-            return;
-          }
-          if (status.status === 'failed') {
-            throw new Error(status.error || 'Motion control generation failed.');
-          }
-        }
-
-        throw new Error('Motion control generation timed out after 5 minutes.');
       } catch (error) {
         get().updateMotionControl(id, {
           status: 'failed',
           error: error instanceof Error ? error.message : 'Motion control generation failed.',
           progress: 0,
         });
+      } finally {
+        activeMotionPolls.delete(id);
       }
     },
 
@@ -911,6 +979,20 @@ export const useWorkflowStore = create<WorkflowState>()(
       );
     },
 
+    resumePendingMotionControls: async () => {
+      const interrupted = get().motionControls.filter(
+        (motion) =>
+          (motion.status === 'generating' || motion.status === 'queued') &&
+          Boolean(motion.taskId) &&
+          !motion.outputUrl,
+      );
+      if (interrupted.length === 0) return;
+
+      await Promise.all(
+        interrupted.map((motion) => get().generateMotionControl(motion.id, { resume: true })),
+      );
+    },
+
     updateScenePrompt: (id, newPrompt) => {
       set((s) => {
         if (s.sceneMap[id]) {
@@ -965,6 +1047,7 @@ export const useWorkflowStore = create<WorkflowState>()(
       });
       persistLayout(get);
       await get().resumePendingGenerations();
+      await get().resumePendingMotionControls();
     },
 
     loadLayoutForProject: (projectId) => {
@@ -985,6 +1068,7 @@ export const useWorkflowStore = create<WorkflowState>()(
         syncOutputNodeVisibility(s);
       });
       persistLayout(get);
+      void get().resumePendingMotionControls();
     },
 
     setNodePosition: (nodeId, position) => {
@@ -1024,6 +1108,7 @@ export const useWorkflowStore = create<WorkflowState>()(
               `motion-video-${motion.id}`,
               `motion-prompt-${motion.id}`,
               `motion-control-${motion.id}`,
+              `motion-output-${motion.id}`,
             ]),
             ...s.inputNodes.map((input) => input.id),
           ]

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   getQwenConfig,
   pollQwenVideoTask,
+  submitQwenMotionControlTask,
   submitQwenVideoTask,
   type QwenConfig,
 } from '@/lib/qwen-client';
@@ -41,11 +42,26 @@ export async function POST(req: NextRequest) {
     }
 
     const config = withGenerationModels(rawConfig, body.generationModels);
+
+    if (body.motionControl) {
+      if (!body.startFrameUrl || !body.referenceVideoUrl) {
+        return NextResponse.json({ error: 'Motion control requires a reference image and video.' }, { status: 400 });
+      }
+
+      const { taskId, model } = await submitQwenMotionControlTask(config, {
+        imageUrl: body.startFrameUrl,
+        videoUrl: body.referenceVideoUrl,
+      });
+
+      return NextResponse.json({ taskId, model });
+    }
+
     const { taskId, model } = await submitQwenVideoTask(config, {
       prompt: body.prompt,
       startFrameUrl: body.startFrameUrl,
       endFrameUrl: body.endFrameUrl,
       referenceVideoUrl: body.referenceVideoUrl,
+      promptExtend: body.promptExtend,
       model: config.videoModel,
     });
 

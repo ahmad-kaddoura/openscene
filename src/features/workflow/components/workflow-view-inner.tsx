@@ -41,6 +41,7 @@ import { ImageInputNode } from './nodes/image-input-node';
 import { VideoInputNode } from './nodes/video-input-node';
 import { PromptInputNode } from './nodes/prompt-input-node';
 import { MotionControlNode } from './nodes/motion-control-node';
+import { MotionOutputNode } from './nodes/motion-output-node';
 import { buildWorkflowGraph } from '../graph/workflow-graph';
 import { useWorkflowNodeContextMenu } from './menus/node-context-menu';
 import { useWorkflowPaneMenu } from './menus/pane-menu';
@@ -58,6 +59,7 @@ const nodeTypes: NodeTypes = {
   videoInput: VideoInputNode,
   promptInput: PromptInputNode,
   motionControl: MotionControlNode,
+  motionOutput: MotionOutputNode,
 };
 
 const backgroundVariantMap = {
@@ -335,6 +337,7 @@ export function WorkflowViewInner() {
               if (node.type === 'videoInput') return 'hsl(24 95% 53%)';
               if (node.type === 'promptInput') return 'hsl(271 91% 65%)';
               if (node.type === 'motionControl') return 'hsl(142 71% 45%)';
+              if (node.type === 'motionOutput') return 'hsl(142 71% 45%)';
               return 'hsl(var(--primary))';
             }}
             nodeBorderRadius={8}
