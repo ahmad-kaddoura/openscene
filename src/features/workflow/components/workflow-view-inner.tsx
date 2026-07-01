@@ -21,13 +21,13 @@ import '@xyflow/react/dist/style.css';
 import { useWorkflowStore } from '@/features/workflow/store';
 import { useProjectStore } from '@/features/project/store';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { OutputPreviewDialog } from './output-preview-dialog';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Play, Loader2, AlignHorizontalSpaceAround, ChevronDown, Download, FileCode2, FileJson } from 'lucide-react';
 import { SceneNode } from './nodes/scene-node';
@@ -391,20 +391,13 @@ export function WorkflowViewInner() {
         {confirmUi}
 
         {outputViewSceneId && viewScene && viewUrl && (
-          <Dialog open={Boolean(outputViewSceneId)} onOpenChange={(o) => !o && setOutputViewSceneId(null)}>
-            <DialogContent className="max-w-lg p-0 overflow-hidden">
-              <DialogHeader className="p-4 pb-0">
-                <DialogTitle className="text-sm">{viewScene.title}</DialogTitle>
-              </DialogHeader>
-              <div className="p-4 pt-2">
-                {viewIsVideo ? (
-                  <video src={viewUrl} controls autoPlay className="w-full rounded-lg bg-black" />
-                ) : (
-                  <img src={viewUrl} alt={viewScene.title} className="w-full rounded-lg" />
-                )}
-              </div>
-            </DialogContent>
-          </Dialog>
+          <OutputPreviewDialog
+            scene={viewScene}
+            url={viewUrl}
+            isVideo={viewIsVideo}
+            open={Boolean(outputViewSceneId)}
+            onOpenChange={(open) => !open && setOutputViewSceneId(null)}
+          />
         )}
       </div>
     </TooltipProvider>
