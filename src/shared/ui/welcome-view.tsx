@@ -33,7 +33,7 @@ export function WelcomeView() {
           </div>
         </div>
 
-        <h1 className="text-3xl font-bold tracking-tight mb-2">Welcome to VideoForge</h1>
+        <h1 className="text-3xl font-bold tracking-tight mb-2">Welcome to OpenScene</h1>
         <p className="text-muted-foreground mb-8 max-w-md mx-auto">
           AI-powered video production studio. Plan, storyboard, generate, and export stunning videos with intelligent AI agents.
         </p>

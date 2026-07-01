@@ -37,7 +37,7 @@ function QwenKeyInstructions() {
           and sign in.
         </li>
         <li>
-          Click <strong className="text-foreground">Create API Key</strong>, enter a description (e.g. &quot;VideoForge&quot;), then click{' '}
+          Click <strong className="text-foreground">Create API Key</strong>, enter a description (e.g. &quot;OpenScene&quot;), then click{' '}
           <strong className="text-foreground">Generate Key</strong>.
         </li>
         <li>
@@ -271,7 +271,7 @@ export function ApiKeysSection() {
 
       {configuredCount === 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90 space-y-1">
-          <p>Create one API key at Qwen Cloud — the description is just a label (e.g. &quot;VideoForge&quot;).</p>
+          <p>Create one API key at Qwen Cloud — the description is just a label (e.g. &quot;OpenScene&quot;).</p>
           <p>After Generate Key, copy the <code className="text-[10px] bg-muted px-1 rounded">sk-</code> value and the Base URL from the bottom of that page.</p>
         </div>
       )}

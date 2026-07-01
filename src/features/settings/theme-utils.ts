@@ -20,7 +20,7 @@ export function applyThemeClass(theme: ThemePreference) {
 export function readPersistedTheme(): ThemePreference | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = localStorage.getItem('videoforge-settings');
+    const raw = localStorage.getItem('openscene-settings');
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { state?: { settings?: { theme?: ThemePreference } } };
     return parsed.state?.settings?.theme ?? null;

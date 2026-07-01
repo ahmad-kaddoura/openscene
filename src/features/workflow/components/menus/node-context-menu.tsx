@@ -19,7 +19,7 @@ type ContextMenuState = {
   node: FlowNode;
 } | null;
 
-const BRAND_KIT_STORAGE_KEY = 'videoforge-brandkits';
+const BRAND_KIT_STORAGE_KEY = 'openscene-brandkits';
 const COLOR_PRESETS = [
   { name: 'Cyan', value: '#22d3ee' },
   { name: 'Emerald', value: '#22c55e' },
@@ -166,7 +166,7 @@ export function useWorkflowNodeContextMenu() {
           <MenuItem disabled={!activeAsset.generatedImageUrl} onClick={() => runAndClose(() => saveAssetToProjectAssets(activeAsset))}>Save to Project Assets</MenuItem>
           <Separator />
           {['Rename', 'Edit with AI', 'Regenerate', 'Duplicate'].map((label) => (
-            <MenuItem key={label} onClick={() => runAndClose(() => console.info(`[VideoForge] ${label}: ${activeAsset.name}`))}>{label}</MenuItem>
+            <MenuItem key={label} onClick={() => runAndClose(() => console.info(`[OpenScene] ${label}: ${activeAsset.name}`))}>{label}</MenuItem>
           ))}
         </>
       )}
@@ -197,7 +197,7 @@ export function useWorkflowNodeContextMenu() {
       )}
       {['parameters', 'script', 'frames'].includes(String(menu.node.type)) && activeScene && (
         <>
-          <MenuItem onClick={() => runAndClose(() => console.info(`[VideoForge] Open ${nodeLabel(menu.node.type)}: ${activeScene.title}`))}>
+          <MenuItem onClick={() => runAndClose(() => console.info(`[OpenScene] Open ${nodeLabel(menu.node.type)}: ${activeScene.title}`))}>
             Open {nodeLabel(menu.node.type)}
           </MenuItem>
           <MenuItem onClick={() => runAndClose(() => duplicateScene(activeScene.id))}>Duplicate Scene</MenuItem>

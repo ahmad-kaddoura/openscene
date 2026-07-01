@@ -500,7 +500,7 @@ export const useTimelineStore = create<TimelineState>()(
             s.render = {
               status: 'done',
               progress: 100,
-              url: `videoforge://export/${nanoid()}.mp4`,
+              url: `openscene://export/${nanoid()}.mp4`,
             };
             s.isPlaying = false;
           }

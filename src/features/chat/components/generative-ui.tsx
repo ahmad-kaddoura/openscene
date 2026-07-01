@@ -27,7 +27,7 @@ import type {
 } from '@/core/types';
 import { buildVideoBriefPatch, pixelsFromResolutionLabel, resolutionLabelFromPixels } from '../lib/video-output-utils';
 
-const BRAND_KIT_STORAGE_KEY = 'videoforge-brandkits';
+const BRAND_KIT_STORAGE_KEY = 'openscene-brandkits';
 
 export interface GenerativeUIOptions {
   /** When set, clicking a preset saves prefs and sends this as the user message. */
@@ -375,7 +375,7 @@ function ReusableAssetCard({ asset }: { asset: ReusableAssetPlan }) {
   };
 
   const logPlaceholder = (label: string) => () => {
-    console.info(`[VideoForge] ${label}: ${asset.name}`);
+    console.info(`[OpenScene] ${label}: ${asset.name}`);
   };
 
   return (

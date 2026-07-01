@@ -171,7 +171,7 @@ function valueToXml(key: string, value: unknown, depth = 0): string {
 }
 
 function workflowSnapshotToXml(snapshot: Record<string, unknown>) {
-  return `<?xml version="1.0" encoding="UTF-8"?>\n${valueToXml('videoforgeWorkflowCanvas', snapshot)}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${valueToXml('openSceneWorkflowCanvas', snapshot)}`;
 }
 
 function parseScalarXmlValue(value: string) {
@@ -215,8 +215,8 @@ function parseWorkflowSnapshotFile(text: string, filename: string) {
   const parseError = doc.querySelector('parsererror');
   if (parseError) throw new Error('The XML file could not be parsed.');
   const root = doc.documentElement;
-  if (root.tagName !== 'videoforgeWorkflowCanvas') {
-    throw new Error('This XML is not a VideoForge workflow export.');
+  if (root.tagName !== 'openSceneWorkflowCanvas') {
+    throw new Error('This XML is not an OpenScene workflow export.');
   }
   return xmlElementToValue(root) as Record<string, unknown>;
 }
@@ -225,7 +225,7 @@ function isWorkflowSnapshot(value: unknown): value is Record<string, unknown> {
   return Boolean(
     value &&
     typeof value === 'object' &&
-    (value as { schema?: unknown }).schema === 'videoforge.workflow.canvas',
+    (value as { schema?: unknown }).schema === 'openscene.workflow.canvas',
   );
 }
 
@@ -521,7 +521,7 @@ export function WorkflowViewInner() {
     const viewport = rfRef.current?.getViewport();
     const canvasPositions = Object.fromEntries(nodes.map((node) => [node.id, node.position]));
     return {
-      schema: 'videoforge.workflow.canvas',
+      schema: 'openscene.workflow.canvas',
       version: 1,
       exportedAt: new Date().toISOString(),
       projectId: currentProject?.id ?? currentProjectId ?? null,
@@ -573,7 +573,7 @@ export function WorkflowViewInner() {
     if (!file) {
       toast({
         title: 'Unsupported file',
-        description: 'Drop a VideoForge workflow export as JSON or XML.',
+        description: 'Drop an OpenScene workflow export as JSON or XML.',
         variant: 'destructive',
       });
       return;
@@ -582,7 +582,7 @@ export function WorkflowViewInner() {
     try {
       const snapshot = parseWorkflowSnapshotFile(await file.text(), file.name);
       if (!isWorkflowSnapshot(snapshot)) {
-        throw new Error('This file is not a VideoForge workflow export.');
+        throw new Error('This file is not an OpenScene workflow export.');
       }
       const normalizedSnapshot = normalizeWorkflowSnapshotForImport(snapshot);
       importWorkflowSnapshot(normalizedSnapshot as Parameters<typeof importWorkflowSnapshot>[0]);

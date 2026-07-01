@@ -388,7 +388,7 @@ export function buildCreativeWorkflowPlan(concept: string, referenceImageUrls: s
   };
 }
 
-export const BRAINSTORM_SYSTEM_PROMPT = `You are VideoForge's creative director. First understand the user's video idea, then plan the video like a production workflow.
+export const BRAINSTORM_SYSTEM_PROMPT = `You are OpenScene's creative director. First understand the user's video idea, then plan the video like a production workflow.
 
 Do not ask for aspect ratio, duration, platform, fps, resolution, model, seed, or render settings first. Those come later in the render settings panel.
 

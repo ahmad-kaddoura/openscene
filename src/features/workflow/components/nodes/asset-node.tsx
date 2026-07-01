@@ -11,7 +11,7 @@ import { useProjectStore } from '@/features/project/store';
 import { storage } from '@/services/storage/indexeddb';
 import type { ReusableAssetPlan } from '@/core/types';
 
-const BRAND_KIT_STORAGE_KEY = 'videoforge-brandkits';
+const BRAND_KIT_STORAGE_KEY = 'openscene-brandkits';
 type WorkflowStyle = { border?: string; line?: string };
 
 function AssetNodeComponent({ data }: NodeProps) {
@@ -71,7 +71,7 @@ function AssetNodeComponent({ data }: NodeProps) {
   };
 
   const action = (label: string) => () => {
-    console.info(`[VideoForge] ${label}: ${asset.name}`);
+    console.info(`[OpenScene] ${label}: ${asset.name}`);
   };
 
   return (

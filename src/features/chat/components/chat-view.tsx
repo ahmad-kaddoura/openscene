@@ -246,7 +246,7 @@ export function ChatView() {
               </div>
               <h2 className="text-lg font-semibold mb-1">Describe Your Video</h2>
               <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                Start with the idea. VideoForge will plan reusable assets, scenes, prompts, and workflow nodes before render settings.
+                Start with the idea. OpenScene will plan reusable assets, scenes, prompts, and workflow nodes before render settings.
               </p>
             </div>
           )}

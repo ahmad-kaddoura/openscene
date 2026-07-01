@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "VideoForge — AI Video Production Studio",
+  title: "OpenScene — AI Video Production Studio",
   description: "Professional AI-powered video creation tool. Plan, storyboard, generate, and export stunning videos with AI agents.",
   icons: {
     icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>",

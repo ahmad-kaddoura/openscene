@@ -9,7 +9,7 @@ import type {
 } from '@/core/types';
 import { DEFAULT_COST_CONTROLS, EXPORT_PRESETS } from '@/core/config';
 
-const CURRENT_PROJECT_KEY = 'videoforge-current-project-id';
+const CURRENT_PROJECT_KEY = 'openscene-current-project-id';
 
 function persistCurrentProjectId(id: string | null) {
   if (typeof window === 'undefined') return;

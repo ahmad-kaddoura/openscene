@@ -261,7 +261,7 @@ export const framesNodeId = (sceneId: string) => `frames-${sceneId}`;
 export const paramsNodeId = parametersNodeId;
 
 function layoutStorageKey(projectId: string) {
-  return `videoforge-layout-${projectId}`;
+  return `openscene-layout-${projectId}`;
 }
 
 export function loadLayoutFromStorage(projectId: string): WorkflowLayout | null {

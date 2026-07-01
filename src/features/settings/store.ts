@@ -138,7 +138,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
     })),
     {
-      name: 'videoforge-settings',
+      name: 'openscene-settings',
       storage: createJSONStorage(() => localStorage),
       merge: (persisted, current) => {
         const p = persisted as Partial<SettingsState> | undefined;

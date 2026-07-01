@@ -17,7 +17,7 @@ import type { BrandKit } from '@/core/types';
 import { nanoid } from 'nanoid';
 
 // Local state for brand kits (in production, use IndexedDB)
-const STORAGE_KEY = 'videoforge-brandkits';
+const STORAGE_KEY = 'openscene-brandkits';
 
 function getBrandKits(): BrandKit[] {
   if (typeof window === 'undefined') return [];

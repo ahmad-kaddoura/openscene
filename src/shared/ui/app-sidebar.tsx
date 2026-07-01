@@ -180,14 +180,14 @@ export function AppSidebar({ collapsed, onNavigate, activeView }: AppSidebarProp
                 <Clapperboard className="w-4 h-4 text-primary-foreground" />
               </div>
             </TooltipTrigger>
-            <TooltipContent side="right">VideoForge</TooltipContent>
+            <TooltipContent side="right">OpenScene</TooltipContent>
           </Tooltip>
         ) : (
           <>
             <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
               <Clapperboard className="w-4 h-4 text-primary-foreground" />
             </div>
-            <span className="font-bold text-sm tracking-tight">VideoForge</span>
+            <span className="font-bold text-sm tracking-tight">OpenScene</span>
           </>
         )}
       </div>

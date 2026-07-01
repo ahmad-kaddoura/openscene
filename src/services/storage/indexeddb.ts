@@ -1,6 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
-interface VideoForgeDB extends DBSchema {
+interface OpenSceneDB extends DBSchema {
   projects: {
     key: string;
     value: {
@@ -114,12 +114,12 @@ interface VideoForgeDB extends DBSchema {
   };
 }
 
-let dbInstance: IDBPDatabase<VideoForgeDB> | null = null;
+let dbInstance: IDBPDatabase<OpenSceneDB> | null = null;
 
-export async function getDB(): Promise<IDBPDatabase<VideoForgeDB>> {
+export async function getDB(): Promise<IDBPDatabase<OpenSceneDB>> {
   if (dbInstance) return dbInstance;
 
-  dbInstance = await openDB<VideoForgeDB>('videoforge-db', 1, {
+  dbInstance = await openDB<OpenSceneDB>('openscene-db', 1, {
     upgrade(db) {
       // Projects store
       if (!db.objectStoreNames.contains('projects')) {
