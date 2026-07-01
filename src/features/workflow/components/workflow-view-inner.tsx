@@ -50,6 +50,12 @@ const nodeTypes: NodeTypes = {
   asset: AssetNode,
 };
 
+const backgroundVariantMap = {
+  dots: BackgroundVariant.Dots,
+  lines: BackgroundVariant.Lines,
+  cross: BackgroundVariant.Cross,
+} as const;
+
 function sanitizeFilename(value: string) {
   return value.trim().replace(/[^a-z0-9-_]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'workflow';
 }
@@ -123,6 +129,8 @@ export function WorkflowViewInner() {
   const applyAutoLayout = useWorkflowStore((s) => s.applyAutoLayout);
   const loadLayoutForProject = useWorkflowStore((s) => s.loadLayoutForProject);
   const edgeLabelPlacement = useSettingsStore((s) => s.settings.edgeLabelPlacement ?? 'in-node');
+  const canvasGrid = useSettingsStore((s) => s.settings.canvasGrid);
+  const theme = useSettingsStore((s) => s.settings.theme);
   const { currentProjectId, getCurrentProject } = useProjectStore();
   const currentProject = getCurrentProject();
   const [, setSelectedNode] = useState<string | null>(null);
@@ -254,6 +262,14 @@ export function WorkflowViewInner() {
 
   const generatingCount = scenes.filter((s) => s.status === 'generating' || s.status === 'regenerating' || s.status === 'queued').length;
   const completedCount = scenes.filter((s) => s.status === 'completed').length;
+  const isDarkTheme = theme === 'dark' || (
+    theme === 'system' &&
+    typeof document !== 'undefined' &&
+    document.documentElement.classList.contains('dark')
+  );
+  const gridColor = isDarkTheme
+    ? `rgba(255, 255, 255, ${canvasGrid.opacity})`
+    : `rgba(15, 23, 42, ${Math.min(0.45, canvasGrid.opacity + 0.08)})`;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -278,7 +294,14 @@ export function WorkflowViewInner() {
           className="bg-background workflow-canvas"
           proOptions={{ hideAttribution: true }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="hsl(var(--border))" />
+          {canvasGrid.enabled && (
+            <Background
+              variant={backgroundVariantMap[canvasGrid.variant]}
+              gap={canvasGrid.gap}
+              size={canvasGrid.variant === 'dots' ? 1.25 : 1}
+              color={gridColor}
+            />
+          )}
           <Controls className="!bg-card !border-border !shadow-lg [&>button]:!bg-card [&>button]:!border-border [&>button]:!text-foreground [&>button:hover]:!bg-muted" />
           <MiniMap
             nodeStrokeColor="hsl(var(--primary))"

@@ -28,6 +28,7 @@ interface SettingsState {
   setScenePromptTemplate: (template: string) => void;
   resetScenePromptTemplate: () => void;
   setEdgeLabelPlacement: (placement: AppSettings['edgeLabelPlacement']) => void;
+  updateCanvasGrid: (updates: Partial<AppSettings['canvasGrid']>) => void;
   setGenerationEffort: (effort: GenerationEffort) => void;
 }
 
@@ -41,6 +42,12 @@ const defaultSettings: AppSettings = {
   defaultFps: 30,
   scenePromptTemplate: DEFAULT_SCENE_PROMPT_TEMPLATE,
   edgeLabelPlacement: 'in-node',
+  canvasGrid: {
+    enabled: false,
+    variant: 'dots',
+    gap: 20,
+    opacity: 0.22,
+  },
   generationModels: DEFAULT_GENERATION_MODELS,
 };
 
@@ -124,6 +131,15 @@ export const useSettingsStore = create<SettingsState>()(
         set((s) => { s.settings.edgeLabelPlacement = placement; });
       },
 
+      updateCanvasGrid: (updates) => {
+        set((s) => {
+          s.settings.canvasGrid = {
+            ...s.settings.canvasGrid,
+            ...updates,
+          };
+        });
+      },
+
       setGenerationEffort: (effort) => {
         set((s) => {
           s.settings.generationModels = GENERATION_MODEL_PRESETS[effort];
@@ -148,6 +164,10 @@ export const useSettingsStore = create<SettingsState>()(
             costControls: {
               ...current.settings.costControls,
               ...p?.settings?.costControls,
+            },
+            canvasGrid: {
+              ...current.settings.canvasGrid,
+              ...p?.settings?.canvasGrid,
             },
             generationModels: {
               ...current.settings.generationModels,

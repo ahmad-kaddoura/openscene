@@ -366,6 +366,14 @@ export type AgentType =
   | 'hook_generator';
 
 export type EdgeLabelPlacement = 'on-edge' | 'in-node';
+export type CanvasGridVariant = 'dots' | 'lines' | 'cross';
+
+export interface CanvasGridSettings {
+  enabled: boolean;
+  variant: CanvasGridVariant;
+  gap: number;
+  opacity: number;
+}
 
 export type GenerationEffort = 'low' | 'medium' | 'high';
 
@@ -389,6 +397,7 @@ export interface AppSettings {
   defaultFps: number;
   scenePromptTemplate: string;
   edgeLabelPlacement: EdgeLabelPlacement;
+  canvasGrid: CanvasGridSettings;
   generationModels: GenerationModelRouting;
 }
 

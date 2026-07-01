@@ -13,7 +13,7 @@ import { Slider } from '@/components/ui/slider';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Sun, Moon, Monitor, Bot, Download, Shield, RotateCcw, KeyRound, FileText } from 'lucide-react';
+import { Sun, Moon, Monitor, Bot, Download, Shield, RotateCcw, KeyRound, FileText, Grid3X3 } from 'lucide-react';
 import { QWEN_MODELS, DEFAULT_AGENT_CONFIGS, DEFAULT_COST_CONTROLS, EXPORT_PRESETS, DEFAULT_SCENE_PROMPT_TEMPLATE, PROMPT_TEMPLATE_VARIABLES } from '@/core/config';
 import { ApiKeysSection } from '@/features/settings/api-keys-section';
 import type { AgentType } from '@/core/types';
@@ -42,6 +42,7 @@ export function SettingsView() {
   const setScenePromptTemplate = useSettingsStore((s) => s.setScenePromptTemplate);
   const resetScenePromptTemplate = useSettingsStore((s) => s.resetScenePromptTemplate);
   const setEdgeLabelPlacement = useSettingsStore((s) => s.setEdgeLabelPlacement);
+  const updateCanvasGrid = useSettingsStore((s) => s.updateCanvasGrid);
   const setGenerationEffort = useSettingsStore((s) => s.setGenerationEffort);
 
   return (
@@ -371,7 +372,7 @@ export function SettingsView() {
 
           {/* Appearance Tab */}
           <TabsContent value="appearance" className="space-y-4">
-            <p className="text-sm text-muted-foreground">Customize the look and feel.</p>
+            <p className="text-sm text-muted-foreground">Customize the app theme and workflow canvas display.</p>
             <Card>
               <CardContent className="p-4 space-y-4">
                 <div>
@@ -398,6 +399,15 @@ export function SettingsView() {
                   </div>
                 </div>
 
+                <Separator />
+
+                <div>
+                  <Label className="text-sm font-medium">Canvas appearance</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Controls for the Workflow canvas labels, grid, and visual guides.
+                  </p>
+                </div>
+
                 <div>
                   <Label className="text-sm font-medium">Connection labels</Label>
                   <p className="text-xs text-muted-foreground mt-1 mb-2">
@@ -421,6 +431,74 @@ export function SettingsView() {
                         {opt.label}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <Label className="text-sm font-medium flex items-center gap-2">
+                        <Grid3X3 className="h-4 w-4" />
+                        Canvas grid
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Show a theme-aware grid behind workflow nodes.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settings.canvasGrid.enabled}
+                      onCheckedChange={(enabled) => updateCanvasGrid({ enabled })}
+                    />
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div>
+                      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Pattern</Label>
+                      <Select
+                        value={settings.canvasGrid.variant}
+                        onValueChange={(variant) => updateCanvasGrid({ variant: variant as typeof settings.canvasGrid.variant })}
+                        disabled={!settings.canvasGrid.enabled}
+                      >
+                        <SelectTrigger className="mt-1 h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="dots">Dots</SelectItem>
+                          <SelectItem value="lines">Lines</SelectItem>
+                          <SelectItem value="cross">Cross</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Spacing: {settings.canvasGrid.gap}px
+                      </Label>
+                      <Slider
+                        className="mt-3"
+                        value={[settings.canvasGrid.gap]}
+                        onValueChange={([gap]) => updateCanvasGrid({ gap })}
+                        min={10}
+                        max={60}
+                        step={2}
+                        disabled={!settings.canvasGrid.enabled}
+                      />
+                    </div>
+
+                    <div>
+                      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Opacity: {Math.round(settings.canvasGrid.opacity * 100)}%
+                      </Label>
+                      <Slider
+                        className="mt-3"
+                        value={[settings.canvasGrid.opacity]}
+                        onValueChange={([opacity]) => updateCanvasGrid({ opacity })}
+                        min={0.06}
+                        max={0.6}
+                        step={0.02}
+                        disabled={!settings.canvasGrid.enabled}
+                      />
+                    </div>
                   </div>
                 </div>
               </CardContent>
