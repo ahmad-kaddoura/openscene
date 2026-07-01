@@ -16,6 +16,7 @@ interface SettingsState {
   addExportPreset: (preset: ExportPreset) => void;
   removeExportPreset: (id: string) => void;
   updateExportPreset: (id: string, updates: Partial<ExportPreset>) => void;
+  resetExportPresets: () => void;
 
   // Cost controls
   updateCostControls: (updates: Partial<CostControls>) => void;
@@ -88,6 +89,12 @@ export const useSettingsStore = create<SettingsState>()(
           if (idx >= 0) {
             s.settings.exportPresets[idx] = { ...s.settings.exportPresets[idx], ...updates };
           }
+        });
+      },
+
+      resetExportPresets: () => {
+        set((s) => {
+          s.settings.exportPresets = EXPORT_PRESETS.map((preset) => ({ ...preset }));
         });
       },
 
