@@ -1,8 +1,306 @@
-import type { ConsistencyReference, CreativeWorkflowPlan, Project, PromptOverrides, ReusableAssetPlan, Scene, VideoBrief, VideoPlanningMode } from '@/core/types';
+import type { ConsistencyReference, CreativeWorkflowPlan, Project, PromptOverrides, ReusableAssetPlan, Scene, ScriptBeat, ScriptScene, VideoBrief, VideoPlanningMode, VideoScript } from '@/core/types';
 import { buildVideoBriefPatch } from './video-output-utils';
 import { getDefaultPrompt, resolvePrompt } from '@/core/prompts';
 
 export type ChatIntent = 'planning' | 'brainstorm' | 'create_brief' | 'generate_storyboard' | 'hooks' | 'review';
+
+const GREETING_PATTERN =
+  /^(hi|hello|hey|yo|sup|good\s+(morning|afternoon|evening)|what'?s up|howdy|hola|thanks|thank you|ok|okay|cool|nice|great|sure|yes|no|test)[!.?\s]*$/i;
+
+const VIDEO_SIGNAL_PATTERN =
+  /\b(video|product|ad|reel|tiktok|instagram|youtube|brand|scene|influencer|ugc|commercial|promo|launch|skincare|makeup|demo|tutorial|review|unbox|sell|showcase|hero|cta|hook|story|audience|customer|buyer|luxury|cosmetic|serum|cream|bottle|device|app|saas|fitness|food|restaurant|hotel|travel|fashion|shoe|watch|jewelry|course|podcast|announcement|creator|spokesperson|model|packshot|b-roll|short-form|short form)\b/i;
+
+export function isGreetingOrSmallTalk(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed) return true;
+  if (GREETING_PATTERN.test(trimmed)) return true;
+  if (trimmed.length < 12 && !VIDEO_SIGNAL_PATTERN.test(trimmed)) return true;
+  return false;
+}
+
+export function wantsExplicitPlan(message: string): boolean {
+  return /\b(plan assets|build workflow|storyboard|scene breakdown|production plan|draft.*plan|create.*plan|make.*plan|plan the reusable|plan the video|build the plan|start planning)\b/i.test(
+    message,
+  );
+}
+
+export function hasVideoConceptSignal(
+  messages: { role: string; content: string }[],
+  referenceImageUrls: string[] = [],
+): boolean {
+  if (referenceImageUrls.length > 0) return true;
+
+  const userText = messages
+    .filter((m) => m.role === 'user')
+    .map((m) => m.content.trim())
+    .filter((content) => content && !isGreetingOrSmallTalk(content))
+    .join(' ')
+    .trim();
+
+  if (userText.length < 15) return false;
+  if (VIDEO_SIGNAL_PATTERN.test(userText)) return true;
+  return userText.length >= 40;
+}
+
+export function shouldPresentPlan(
+  lastUser: string,
+  messages: { role: string; content: string }[],
+  referenceImageUrls: string[] = [],
+): boolean {
+  const explicit = wantsExplicitPlan(lastUser);
+  const hasConcept = hasVideoConceptSignal(messages, referenceImageUrls);
+
+  if (isGreetingOrSmallTalk(lastUser) && !explicit) return false;
+  if (explicit) return hasConcept;
+  if (!hasConcept) return false;
+  if (/\b(ready|go ahead|sounds good|let'?s do it|build it|make the plan|draft it|start planning|looks good)\b/i.test(lastUser)) {
+    return true;
+  }
+  return !isGreetingOrSmallTalk(lastUser) && lastUser.trim().length >= 60;
+}
+
+export function getConversationSuggestions(
+  messages: { role: string; content: string }[],
+  referenceImageUrls: string[] = [],
+): string[] {
+  const userMessages = messages.filter((m) => m.role === 'user');
+  const lastUser = userMessages[userMessages.length - 1]?.content ?? '';
+
+  if (userMessages.length === 0) {
+    return [
+      'Product ad for my skincare line — premium, no people',
+      'UGC-style creator tutorial with a locked-on-camera host',
+      '15s launch teaser for a new app',
+      'I have reference images to share',
+    ];
+  }
+
+  if (isGreetingOrSmallTalk(lastUser)) {
+    return [
+      'I want a short product video for social ads',
+      'Creator-led reel with the same person in every scene',
+      'Brand story video with a clear hook and CTA',
+      'Help me figure out the right format first',
+    ];
+  }
+
+  if (referenceImageUrls.length > 0 && !hasVideoConceptSignal(messages, referenceImageUrls)) {
+    return [
+      'Product hero ad using the attached references',
+      'Creator review video featuring this product',
+      'Multiple scenes in the same environment',
+      'Just polish the visual direction for now',
+    ];
+  }
+
+  if (!hasVideoConceptSignal(messages, referenceImageUrls)) {
+    return [
+      'Target buyers on Instagram and TikTok',
+      'Premium cinematic look, slow and polished',
+      'Fast-paced UGC energy with a strong hook',
+      'About 20 seconds, vertical 9:16',
+    ];
+  }
+
+  if (wantsExplicitPlan(lastUser) || shouldPresentPlan(lastUser, messages, referenceImageUrls)) {
+    return [
+      'Draft the full production plan now',
+      'Add one more scene before planning',
+      'Keep it product-only with no people',
+      'Make the hook more dramatic',
+    ];
+  }
+
+  return [
+    'That direction works — draft the production plan',
+    'Change the tone to feel more premium',
+    'Focus on a stronger opening hook',
+    'Add more detail about the target viewer',
+  ];
+}
+
+export function buildFallbackConversation(
+  lastUser: string,
+  messages: { role: string; content: string }[],
+  referenceImageUrls: string[] = [],
+): string {
+  if (isGreetingOrSmallTalk(lastUser)) {
+    return "Hey — I'm here to help you plan a production-level video before anything gets generated.\n\nTell me what you're making (product ad, creator reel, launch teaser, etc.), who it's for, and any references you have. I'll ask a couple of focused questions, then draft a full per-second script we can lock before any images.";
+  }
+
+  if (wantsExplicitPlan(lastUser) && !hasVideoConceptSignal(messages, referenceImageUrls)) {
+    return "Happy to draft the script — I just need a bit more context first.\n\nWhat's the video about, who's it for, and is it product-led, creator-led, or a mix? Attach reference images if you have them.";
+  }
+
+  if (!hasVideoConceptSignal(messages, referenceImageUrls)) {
+    return "Got it. A few quick questions will help me shape a solid script:\n\n1. **Goal** — sell, educate, launch, or build brand?\n2. **Subject** — product, person, place, or story?\n3. **Vibe** — premium commercial, UGC creator, cinematic, playful?\n\nShare whatever you know; we can fill in the rest together.";
+  }
+
+  return "This is taking shape. Tell me if you'd like to refine the angle, or say **draft the script** when you're ready and I'll write a per-second shooting script for review.";
+}
+
+// ============= Staged production flow =============
+
+export function detectScriptApproval(message: string): boolean {
+  return /approve\s+(the\s+)?script|script\s+(looks\s+good|is\s+good|is\s+locked|looks\s+great)|lock\s+the\s+script|move\s+(on\s+)?to\s+(the\s+)?(influencer|character|background)|next\s+step/i.test(
+    message,
+  );
+}
+
+export function isSkipToWorkflow(message: string): boolean {
+  return /\bskip\s+to\s+workflow\b|\bgo\s+to\s+workflow\b|\bopen\s+(the\s+)?workflow\b|\bskip\s+planning\b/i.test(message);
+}
+
+export function shouldPresentScript(
+  lastUser: string,
+  messages: { role: string; content: string }[],
+  referenceImageUrls: string[] = [],
+): boolean {
+  if (isGreetingOrSmallTalk(lastUser)) return false;
+  if (!hasVideoConceptSignal(messages, referenceImageUrls)) return false;
+  if (/draft\s+(the\s+)?script|write\s+(the\s+)?script|build\s+(the\s+)?script|per-second\s+script|shooting\s+script/i.test(lastUser)) {
+    return true;
+  }
+  const substantiveUserTurns = messages
+    .filter((m) => m.role === 'user')
+    .filter((m) => !isGreetingOrSmallTalk(m.content)).length;
+  if (substantiveUserTurns >= 3 && lastUser.trim().length >= 20) return true;
+  return false;
+}
+
+const SCRIPT_APPROVAL_WORDS =
+  /approve|approved|looks good|lock\s+the\s+script|next\s+step|move\s+(on\s+)?to\s+(the\s+)?(influencer|character|background)/i;
+
+export function wantsInfluencerStep(message: string): boolean {
+  return /\b(influencer|character|host|creator|persona)\b/i.test(message) && /generat|create|build|next|approv/i.test(message);
+}
+
+export function wantsBackgroundStep(message: string): boolean {
+  return /\b(background|environment|set|location|scene\s+background)\b/i.test(message) && /generat|create|build|next|approv/i.test(message);
+}
+
+export function wantsFramesStep(message: string): boolean {
+  return /\b(frames?|start\s+frame|end\s+frame)\b/i.test(message) && /generat|create|build|next|approv/i.test(message);
+}
+
+export function detectScriptApprovalPhrase(message: string): boolean {
+  return SCRIPT_APPROVAL_WORDS.test(message);
+}
+
+function fallbackScriptScene(
+  index: number,
+  sceneInput: { title: string; sceneGoal?: string; prompt: string; actionDescription?: string; duration: number; startTime: number; cameraMovement: Scene['cameraMovement']; narration?: string; mood: string; visualStyle?: string; lighting?: string },
+): ScriptScene {
+  const duration = Math.max(1, Math.round(sceneInput.duration));
+  const action = sceneInput.actionDescription || sceneInput.sceneGoal || sceneInput.prompt;
+  const beats: ScriptBeat[] = Array.from({ length: duration }, (_, second) => ({
+    second,
+    action: `${action}${second > 0 ? ' (continued)' : ''}`,
+    dialogue: sceneInput.narration && second === 0 ? sceneInput.narration : undefined,
+    behavior: second === 0 ? 'Settles into frame, easy eye contact with camera' : 'Holds presence, subtle natural movement',
+    camera: `${sceneInput.cameraMovement.replace(/_/g, ' ')}, second ${second + 1}`,
+  }));
+  return {
+    id: `scene-${index}`,
+    order: index,
+    title: sceneInput.title,
+    durationSeconds: duration,
+    goal: sceneInput.sceneGoal || sceneInput.title,
+    narration: sceneInput.narration || '',
+    beats,
+    cameraBehavior: sceneInput.cameraMovement.replace(/_/g, ' '),
+    mood: sceneInput.mood,
+    visualNotes: [sceneInput.visualStyle, sceneInput.lighting].filter(Boolean).join('. ') || 'Natural motivated lighting, real-world texture, no AI sheen.',
+  };
+}
+
+export function buildFallbackVideoScript(
+  concept: string,
+  scenes: Scene[],
+  durationSeconds: number,
+): VideoScript {
+  const sceneCount = scenes.length;
+  const scriptScenes = scenes.map((sc, idx) =>
+    fallbackScriptScene(idx + 1, {
+      title: sc.title,
+      sceneGoal: sc.sceneGoal,
+      prompt: sc.prompt,
+      actionDescription: sc.actionDescription,
+      duration: sc.duration,
+      startTime: sc.startTime,
+      cameraMovement: sc.cameraMovement,
+      narration: sc.narration,
+      mood: sc.mood,
+      visualStyle: sc.visualStyle,
+      lighting: sc.lighting,
+    }),
+  );
+  return {
+    id: `script-${Date.now()}`,
+    logline: concept || 'A short-form video that holds a single, consistent identity across every scene.',
+    durationSeconds,
+    sceneCount,
+    narrationStyle: 'Natural, first-person creator voice with confident pauses.',
+    scenes: scriptScenes,
+    approvalStatus: 'draft',
+  };
+}
+
+export interface ScriptBuildInput {
+  concept: string;
+  sceneCount: number;
+  durationSeconds: number;
+  aspectRatio: string;
+  videoMode: VideoPlanningMode;
+}
+
+export function buildFallbackVideoScriptFromPlan(
+  concept: string,
+  plan: CreativeWorkflowPlan,
+  settings: { aspectRatio?: string; duration?: number },
+): VideoScript {
+  const duration = settings.duration || plan.suggestedDuration || plan.scenes.reduce((sum, sc) => sum + sc.duration, 0);
+  return buildFallbackVideoScript(concept || plan.concept, plan.scenes, duration);
+}
+
+export function getScriptFromJson(raw: string): VideoScript | null {
+  try {
+    const trimmed = raw.trim().replace(/^```json\s*|\s```$/g, '');
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || !Array.isArray(parsed.scenes)) return null;
+    const scenes: ScriptScene[] = parsed.scenes.map((sc: any, idx: number) => ({
+      id: sc.id || `scene-${idx + 1}`,
+      order: sc.order ?? idx + 1,
+      title: String(sc.title ?? `Scene ${idx + 1}`),
+      durationSeconds: Number(sc.durationSeconds) || 1,
+      goal: String(sc.goal ?? ''),
+      narration: String(sc.narration ?? ''),
+      beats: Array.isArray(sc.beats)
+        ? sc.beats.map((b: any, i: number) => ({
+            second: Number(b.second ?? i),
+            action: String(b.action ?? ''),
+            dialogue: b.dialogue ? String(b.dialogue) : undefined,
+            behavior: b.behavior ? String(b.behavior) : undefined,
+            camera: b.camera ? String(b.camera) : undefined,
+          }))
+        : [],
+      cameraBehavior: String(sc.cameraBehavior ?? ''),
+      mood: String(sc.mood ?? ''),
+      visualNotes: String(sc.visualNotes ?? ''),
+    }));
+    return {
+      id: `script-${Date.now()}`,
+      logline: String(parsed.logline ?? ''),
+      durationSeconds: Number(parsed.durationSeconds) || scenes.reduce((sum, sc) => sum + sc.durationSeconds, 0),
+      sceneCount: scenes.length,
+      narrationStyle: String(parsed.narrationStyle ?? ''),
+      scenes,
+      approvalStatus: 'draft',
+    };
+  } catch {
+    return null;
+  }
+}
 
 export function detectChatIntent(message: string): ChatIntent | null {
   const m = message.toLowerCase();
@@ -25,6 +323,7 @@ export function extractConceptFromMessages(messages: { role: string; content: st
   return messages
     .filter((m) => m.role === 'user')
     .map((m) => m.content)
+    .filter((c) => !isGreetingOrSmallTalk(c))
     .filter((c) => !/^\d+:\d+|aspect ratio|fps|resolution|\d+ seconds?$/i.test(c))
     .slice(-5)
     .join(' ')

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getQwenConfig, callQwenChat, callQwenImageGeneration, type QwenCallError, type QwenConfig } from '@/lib/qwen-client';
-import type { CreativeWorkflowPlan, GenerationModelRouting, GenerativeUIComponent, PromptOverrides, Scene, VideoBrief } from '@/core/types';
+import type { CreativeWorkflowPlan, GenerationModelRouting, GenerativeUIComponent, PromptOverrides, ProjectSettings, ReusableAssetPlan, Scene, VideoBrief, VideoScript } from '@/core/types';
 import {
   detectPlanApproval,
   detectChatIntent,
@@ -9,6 +9,17 @@ import {
   buildStoryboardScenes,
   buildCreativeWorkflowPlanWithPrompts,
   BRAINSTORM_SYSTEM_PROMPT,
+  shouldPresentPlan,
+  getConversationSuggestions,
+  buildFallbackConversation,
+  shouldPresentScript,
+  detectScriptApproval,
+  isSkipToWorkflow,
+  wantsInfluencerStep,
+  wantsBackgroundStep,
+  wantsFramesStep,
+  buildFallbackVideoScriptFromPlan,
+  getScriptFromJson,
 } from '@/features/chat';
 import { resolvePrompt } from '@/core/prompts';
 
@@ -139,6 +150,248 @@ async function hydratePlanImages(plan: CreativeWorkflowPlan, config: QwenConfig,
   return next;
 }
 
+function getInfluencerAsset(plan: CreativeWorkflowPlan): ReusableAssetPlan | undefined {
+  return plan.reusableAssets.find((a) => a.type === 'influencer');
+}
+
+function getBackgroundAsset(plan: CreativeWorkflowPlan): ReusableAssetPlan | undefined {
+  return plan.reusableAssets.find((a) => a.type === 'background' || a.type === 'environment');
+}
+
+async function generateSingleAsset(
+  asset: ReusableAssetPlan,
+  config: QwenConfig | null,
+): Promise<ReusableAssetPlan> {
+  if (!config) {
+    return { ...asset, generationStatus: 'pending', generationError: undefined };
+  }
+  try {
+    const result = await generateImageWithRetry(config, asset.referenceImagePrompt, {
+      model: config.imageModel,
+      negativePrompt: asset.negativePrompt,
+    });
+    return {
+      ...asset,
+      generatedImageUrl: result.url,
+      generationStatus: 'generated',
+      generationModel: result.model,
+      generationError: undefined,
+    };
+  } catch (error) {
+    const err = error as QwenCallError;
+    return {
+      ...asset,
+      generationStatus: 'failed',
+      generationModel: config.imageModel,
+      generationError: err.message,
+    };
+  }
+}
+
+async function generateSceneFrames(
+  scene: Scene,
+  plan: CreativeWorkflowPlan,
+  config: QwenConfig | null,
+  promptOverrides?: PromptOverrides,
+): Promise<Scene> {
+  if (!config) {
+    return { ...scene, frameGenerationStatus: 'pending' };
+  }
+  try {
+    const start = await generateImageWithRetry(config, framePrompt(scene, 'start', plan, promptOverrides), {
+      model: config.frameModel,
+      negativePrompt: scene.negativePrompt || scene.avoid,
+    });
+    const end = await generateImageWithRetry(config, framePrompt(scene, 'end', plan, promptOverrides), {
+      model: config.frameModel,
+      negativePrompt: scene.negativePrompt || scene.avoid,
+    });
+    return {
+      ...scene,
+      startFrameUrl: start.url,
+      endFrameUrl: end.url,
+      generatedStartFrameUrl: start.url,
+      generatedEndFrameUrl: end.url,
+      frameGenerationStatus: 'generated',
+      frameGenerationModel: start.model,
+      frameGenerationError: undefined,
+    };
+  } catch (error) {
+    const err = error as QwenCallError;
+    return {
+      ...scene,
+      frameGenerationStatus: 'failed',
+      frameGenerationModel: config.frameModel,
+      frameGenerationError: err.message,
+    };
+  }
+}
+
+function settingsFromProject(project: any): { aspectRatio?: string; duration?: number } {
+  const s = (project?.settings ?? {}) as Partial<ProjectSettings>;
+  const briefDuration = project?.videoBrief?.duration as number | undefined;
+  return {
+    aspectRatio: s.aspectRatio,
+    duration: briefDuration,
+  };
+}
+
+function stagedSuggestions(step: 'script' | 'influencer' | 'background' | 'frames' | 'workflow'): string[] {
+  switch (step) {
+    case 'script':
+      return [
+        'Approve the script and generate the influencer next',
+        'Make the opening hook more dramatic',
+        'Tighten the dialogue in scene 2',
+        'Add one more scene before approving',
+      ];
+    case 'influencer':
+      return [
+        'Approve the influencer and generate the background',
+        'Regenerate the influencer with a different look',
+        'Soften the expression',
+        'Try a different outfit',
+      ];
+    case 'background':
+      return [
+        'Approve the background and generate the frames',
+        'Regenerate the background',
+        'Make the lighting warmer',
+        'Use a cleaner environment',
+      ];
+    case 'frames':
+      return [
+        'Approve all frames and open Workflow',
+        'Regenerate scene 1 frames',
+        'Make the start frame more dynamic',
+        'Adjust the end frame composition',
+      ];
+    default:
+      return [];
+  }
+}
+
+function stagedConversationResponse(content: string, step: 'script' | 'influencer' | 'background' | 'frames' | 'workflow', metadata: Record<string, unknown> = {}, config?: QwenConfig | null) {
+  const suggestions = stagedSuggestions(step);
+  return NextResponse.json({
+    content,
+    phase: 'brainstorm',
+    generativeUI: suggestions.length
+      ? [{ type: 'chat_suggestions', data: { suggestions } } satisfies GenerativeUIComponent]
+      : undefined,
+    metadata: {
+      model: config?.model || 'local',
+      intent: 'staged_conversation',
+      productionStep: step,
+      ...metadata,
+    },
+  });
+}
+
+function conversationResponse(
+  content: string,
+  convo: { role: string; content: string }[],
+  refs: string[],
+  metadata: Record<string, unknown> = {},
+  config?: QwenConfig | null,
+) {
+  const suggestions = getConversationSuggestions(convo, refs);
+  return NextResponse.json({
+    content,
+    phase: 'brainstorm',
+    generativeUI: suggestions.length
+      ? [{ type: 'chat_suggestions', data: { suggestions } } satisfies GenerativeUIComponent]
+      : undefined,
+    metadata: {
+      model: config?.model || 'local',
+      intent: 'conversation',
+      ...metadata,
+    },
+  });
+}
+
+function scriptResponse(script: VideoScript, metadata: Record<string, unknown> = {}, config?: QwenConfig | null) {
+  return NextResponse.json({
+    content: resolvePrompt('planning.script.response', {
+      sceneCount: script.sceneCount,
+      duration: script.durationSeconds,
+    }),
+    phase: 'script_ready',
+    generativeUI: [{ type: 'script_card', data: script } satisfies GenerativeUIComponent],
+    metadata: {
+      model: config?.model || 'local',
+      intent: 'script',
+      productionStep: 'script',
+      ...metadata,
+    },
+  });
+}
+
+function influencerCardResponse(asset: ReusableAssetPlan, content: string, metadata: Record<string, unknown> = {}) {
+  return NextResponse.json({
+    content,
+    phase: 'influencer_ready',
+    generativeUI: [{ type: 'influencer_card', data: asset } satisfies GenerativeUIComponent],
+    metadata: {
+      intent: 'influencer_step',
+      productionStep: 'influencer',
+      ...metadata,
+    },
+  });
+}
+
+function backgroundCardResponse(asset: ReusableAssetPlan, content: string, metadata: Record<string, unknown> = {}) {
+  return NextResponse.json({
+    content,
+    phase: 'background_ready',
+    generativeUI: [{ type: 'background_card', data: asset } satisfies GenerativeUIComponent],
+    metadata: {
+      intent: 'background_step',
+      productionStep: 'background',
+      ...metadata,
+    },
+  });
+}
+
+function framesCardResponse(scenes: Scene[], content: string, metadata: Record<string, unknown> = {}) {
+  return NextResponse.json({
+    content,
+    phase: 'frames_ready',
+    generativeUI: [{ type: 'frames_card', data: { scenes } } satisfies GenerativeUIComponent],
+    metadata: {
+      intent: 'frames_step',
+      productionStep: 'frames',
+      ...metadata,
+    },
+  });
+}
+
+function workflowHandoffResponse(metadata: Record<string, unknown> = {}) {
+  return NextResponse.json({
+    content: `Everything is approved — script, influencer identity, background, and start/end frames for every scene.\n\nOpening **Workflow** now with all nodes seeded. You can fine-tune any prompt or motion there before final render.`,
+    phase: 'workflow',
+    seedFromPlan: true,
+    metadata: {
+      intent: 'workflow_handoff',
+      productionStep: 'workflow',
+      ...metadata,
+    },
+  });
+}
+
+function skipToWorkflowResponse(metadata: Record<string, unknown> = {}) {
+  return NextResponse.json({
+    content: `Skipping to **Workflow**. You'll get a blank canvas — add scenes, scripts, assets, and frames manually, or use the workflow's AI actions to generate from scratch.`,
+    phase: 'workflow',
+    skipToWorkflow: true,
+    metadata: {
+      intent: 'skip_to_workflow',
+      productionStep: 'workflow',
+      ...metadata,
+    },
+  });
+}
+
 function planReviewResponse(plan: CreativeWorkflowPlan, metadata: Record<string, unknown> = {}, config?: QwenConfig | null, promptOverrides?: PromptOverrides) {
   return NextResponse.json({
     content: resolvePrompt('scenario.plan.response', {
@@ -225,6 +478,14 @@ export async function POST(req: NextRequest) {
     const rawConfig = await getQwenConfig();
     const config = rawConfig ? withGenerationModels(rawConfig, generationModels) : null;
     const existingPlan = project?.creativePlan as CreativeWorkflowPlan | undefined;
+    const existingScript = project?.videoScript as VideoScript | undefined;
+    const scriptApproved = existingScript?.approvalStatus === 'approved';
+    const settings = settingsFromProject(project);
+
+    // --- Skip to Workflow (blank canvas) ---
+    if (isSkipToWorkflow(lastUser)) {
+      return skipToWorkflowResponse({ model: config?.model || 'local' });
+    }
 
     if (approved && existingPlan) {
       return approvedAssetsResponse(
@@ -235,10 +496,119 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // --- Staged production flow (default path) ---
+    const planForStaged = existingPlan ?? buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides);
+    const presentScript = shouldPresentScript(lastUser, convo, refs);
+    const wantsInfluencer = wantsInfluencerStep(lastUser);
+    const wantsBackground = wantsBackgroundStep(lastUser);
+    const wantsFrames = wantsFramesStep(lastUser);
+    const scriptApprovalClicked = detectScriptApproval(lastUser);
+
+    // 1) Script approval: mark approved, then nudge to influencer (or generate if user combined)
+    if (scriptApprovalClicked && existingScript && !scriptApproved) {
+      const approvedScript: VideoScript = { ...existingScript, approvalStatus: 'approved' };
+      if (wantsInfluencer) {
+        const asset = getInfluencerAsset(planForStaged);
+        if (asset) {
+          const generated = await generateSingleAsset(asset, config);
+          return influencerCardResponse(generated, `Script locked. Now generating the **influencer identity** — one stable face, hairstyle, and outfit we'll reuse in every scene.`, {
+            model: config?.model || 'local',
+            imageModel: config?.imageModel,
+            approvedScript,
+          });
+        }
+      }
+      return stagedConversationResponse(
+        `Script locked. Next I'll generate the **influencer identity** — one stable face, hairstyle, and outfit we'll reuse in every scene. Say "generate the influencer" when you're ready.`,
+        'influencer',
+        { model: config?.model || 'local', approvedScript },
+        config,
+      );
+    }
+
+    // 2) Generate the script (no images yet)
+    if (presentScript && !existingScript) {
+      const sceneCount = planForStaged.scenes.length;
+      const durationSeconds = settings.duration || planForStaged.suggestedDuration || planForStaged.scenes.reduce((s, sc) => s + sc.duration, 0);
+      const aspectRatio = settings.aspectRatio || planForStaged.suggestedAspectRatio || '9:16';
+      if (config) {
+        try {
+          const scriptSystem = resolvePrompt(
+            'planning.script.system',
+            { sceneCount, durationSeconds, aspectRatio, videoMode: planForStaged.videoMode },
+            promptOverrides,
+          );
+          const result = await callQwenChat(
+            config,
+            [
+              { role: 'system', content: scriptSystem },
+              { role: 'user', content: `Concept: ${concept || lastUser}\n\nReturn the JSON script now.` },
+            ],
+            { jsonMode: true, maxTokens: 1800 },
+          );
+          const parsed = getScriptFromJson(result.content);
+          if (parsed) {
+            return scriptResponse(parsed, { model: config.model, tokens: result.usage?.total_tokens, planId: planForStaged.id });
+          }
+          const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, planForStaged, settings);
+          return scriptResponse(fallback, { model: 'fallback', reason: 'json_parse' });
+        } catch (err) {
+          const qErr = err as QwenCallError;
+          const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, planForStaged, settings);
+          return scriptResponse(fallback, { model: 'fallback', error: qErr.kind, notice: qErr.message });
+        }
+      }
+      const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, planForStaged, settings);
+      return scriptResponse(fallback, { model: 'unconfigured', needsConfig: true });
+    }
+
+    // 3) Generate the influencer
+    if (scriptApproved && wantsInfluencer) {
+      const asset = getInfluencerAsset(planForStaged);
+      if (asset) {
+        const generated = await generateSingleAsset(asset, config);
+        return influencerCardResponse(generated, `Here's the locked influencer identity. Review it, then say "generate the background" to build the environment.`, {
+          model: config?.model || 'local',
+          imageModel: config?.imageModel,
+        });
+      }
+    }
+
+    // 4) Generate the background
+    if (scriptApproved && (wantsBackground || (existingPlan && getInfluencerAsset(existingPlan)?.generatedImageUrl && !getBackgroundAsset(existingPlan)?.generatedImageUrl && /approv|next|generate|background/i.test(lastUser)))) {
+      const asset = getBackgroundAsset(planForStaged);
+      if (asset) {
+        const generated = await generateSingleAsset(asset, config);
+        return backgroundCardResponse(generated, `Background locked. Next I'll generate the start and end frames for every scene. Say "generate the frames" when ready.`, {
+          model: config?.model || 'local',
+          imageModel: config?.imageModel,
+        });
+      }
+    }
+
+    // 5) Generate per-scene frames
+    if (scriptApproved && wantsFrames) {
+      const scenesWithFrames: Scene[] = [];
+      for (const scene of planForStaged.scenes) {
+        scenesWithFrames.push(await generateSceneFrames(scene, planForStaged, config, promptOverrides));
+      }
+      return framesCardResponse(scenesWithFrames, `Start and end frames for all ${scenesWithFrames.length} scenes. Review them, then approve to open Workflow with everything seeded.`, {
+        model: config?.model || 'local',
+        frameModel: config?.frameModel,
+      });
+    }
+
+    // 6) Workflow handoff after frames approved
+    if (scriptApproved && existingPlan?.approvalStatus === 'assets_generated') {
+      return workflowHandoffResponse({ model: config?.model || 'local' });
+    }
+
+    const presentPlan = shouldPresentPlan(lastUser, convo, refs);
+    const refNote = refs.length
+      ? `The user attached ${refs.length} reference image(s). Treat user-provided images as source-of-truth references where relevant.`
+      : '';
+
     if (config) {
-      const refNote = refs.length
-        ? `The user attached ${refs.length} reference image(s). Treat user-provided images as source-of-truth references where relevant.`
-        : '';
       try {
         const result = await callQwenChat(
           config,
@@ -246,20 +616,60 @@ export async function POST(req: NextRequest) {
             { role: 'system', content: resolvePrompt('planning.chat.system', { referenceCount: refs.length, referenceNote: refNote }, promptOverrides) || BRAINSTORM_SYSTEM_PROMPT },
             ...convo,
           ],
-          { jsonMode: false, maxTokens: 800 }
+          { jsonMode: false, maxTokens: presentPlan ? 800 : 600 }
         );
+
+        if (!presentPlan && !presentScript) {
+          return conversationResponse(result.content, convo, refs, {
+            model: config.model,
+            tokens: result.usage?.total_tokens,
+          }, config);
+        }
+        if (presentScript && !existingScript) {
+          // conversation mode but script is warranted — ask the model to summarize intent, then return fallback script
+          const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, planForStaged, settings);
+          return scriptResponse(fallback, { model: config.model, aiPlanningNotes: result.content });
+        }
+
         const plan = buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides);
         return planReviewResponse(plan, {
-            model: config.model,
-            aiPlanningNotes: result.content,
-            intent: 'creative_plan',
-            tokens: result.usage?.total_tokens,
-          }, config, promptOverrides);
+          model: config.model,
+          aiPlanningNotes: result.content,
+          intent: 'creative_plan',
+          tokens: result.usage?.total_tokens,
+        }, config, promptOverrides);
       } catch (err) {
         const qErr = err as QwenCallError;
+        if (!presentPlan && !presentScript) {
+          return conversationResponse(
+            buildFallbackConversation(lastUser, convo, refs),
+            convo,
+            refs,
+            { model: 'fallback', error: qErr.kind, notice: qErr.message },
+            config,
+          );
+        }
+        if (presentScript && !existingScript) {
+          const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, planForStaged, settings);
+          return scriptResponse(fallback, { model: 'fallback', error: qErr.kind, notice: qErr.message });
+        }
         const plan = buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides);
         return planReviewResponse(plan, { model: 'fallback', error: qErr.kind, notice: qErr.message }, config, promptOverrides);
       }
+    }
+
+    if (!presentPlan && !presentScript) {
+      return conversationResponse(
+        buildFallbackConversation(lastUser, convo, refs),
+        convo,
+        refs,
+        { model: 'unconfigured', needsConfig: true },
+        null,
+      );
+    }
+    if (presentScript && !existingScript) {
+      const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, planForStaged, settings);
+      return scriptResponse(fallback, { model: 'unconfigured', needsConfig: true });
     }
 
     const plan = buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides);

@@ -14,6 +14,8 @@ export interface Project {
   storyboard?: Storyboard;
   workflowGraph?: WorkflowGraph;
   creativePlan?: CreativeWorkflowPlan;
+  videoScript?: VideoScript;
+  productionStep?: ProductionStep;
   usageEvents?: UsageEvent[];
   settings: ProjectSettings;
   versions: ProjectVersion[];
@@ -23,6 +25,7 @@ export interface Project {
 
 export type ProjectStatus = 'draft' | 'in_progress' | 'review' | 'completed' | 'archived';
 export type ProjectPhase = 'chat' | 'workflow' | 'timeline' | 'brief' | 'storyboard' | 'generation' | 'export';
+export type ProductionStep = 'script' | 'influencer' | 'background' | 'frames' | 'workflow';
 
 export interface ProjectVersion {
   id: string;
@@ -234,6 +237,43 @@ export interface Character {
   createdAt: string;
 }
 
+// ============= Video Script =============
+export interface ScriptBeat {
+  /** 0-based offset inside the scene */
+  second: number;
+  /** what the character does that second */
+  action: string;
+  /** what they say */
+  dialogue?: string;
+  /** expression / body language */
+  behavior?: string;
+  /** camera note for that second */
+  camera?: string;
+}
+
+export interface ScriptScene {
+  id: string;
+  order: number;
+  title: string;
+  durationSeconds: number;
+  goal: string;
+  narration: string;
+  beats: ScriptBeat[];
+  cameraBehavior: string;
+  mood: string;
+  visualNotes: string;
+}
+
+export interface VideoScript {
+  id: string;
+  logline: string;
+  durationSeconds: number;
+  sceneCount: number;
+  narrationStyle: string;
+  scenes: ScriptScene[];
+  approvalStatus: 'draft' | 'approved';
+}
+
 // ============= Creative Planning =============
 export type ReusableAssetType = 'character' | 'influencer' | 'brand_identity' | 'product' | 'logo' | 'environment' | 'background' | 'style_reference';
 
@@ -327,7 +367,12 @@ export type GenerativeUIComponent =
   | { type: 'product_form'; data: Partial<ProductDetails> }
   | { type: 'hook_suggestions'; data: { hooks: string[] } }
   | { type: 'director_review'; data: DirectorReview }
-  | { type: 'confirmation'; data: { message: string; action: string } };
+  | { type: 'confirmation'; data: { message: string; action: string } }
+  | { type: 'chat_suggestions'; data: { suggestions: string[] } }
+  | { type: 'script_card'; data: VideoScript }
+  | { type: 'influencer_card'; data: ReusableAssetPlan }
+  | { type: 'background_card'; data: ReusableAssetPlan }
+  | { type: 'frames_card'; data: { scenes: Scene[] } };
 
 // ============= AI Director =============
 export interface DirectorReview {

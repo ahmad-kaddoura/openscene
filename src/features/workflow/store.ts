@@ -312,6 +312,7 @@ interface WorkflowState {
   getScenes: () => Scene[];
   getTotalDuration: () => number;
   buildFromStoryboard: (scenes: Scene[]) => void;
+  clearGraph: () => void;
   hydrateFromProject: (projectId: string, scenes: Scene[]) => Promise<void>;
   importWorkflowSnapshot: (snapshot: {
     scenes?: Scene[];
@@ -1135,16 +1136,56 @@ export const useWorkflowStore = create<WorkflowState>()(
     },
 
     buildFromStoryboard: (scenes) => {
+      // Merge approved per-second script beats into scene fields so the
+      // workflow's Script nodes start populated with the locked script.
+      const project = useProjectStore.getState().getCurrentProject();
+      const script = project?.videoScript;
+      const mergedScenes = script?.approvalStatus === 'approved' && script.scenes.length
+        ? scenes.map((sc, idx) => {
+            const scriptScene = script.scenes[idx] || script.scenes.find((ss) => ss.id === sc.id);
+            if (!scriptScene) return sc;
+            const beatLines = scriptScene.beats
+              .map((b) => `${b.second + 1}s: ${b.action}${b.dialogue ? ` — "${b.dialogue}"` : ''}${b.behavior ? ` (${b.behavior})` : ''}${b.camera ? ` [cam: ${b.camera}]` : ''}`)
+              .join('\n');
+            return {
+              ...sc,
+              sceneGoal: scriptScene.goal || sc.sceneGoal,
+              sceneDescription: scriptScene.goal || sc.sceneDescription || sc.prompt,
+              actionDescription: beatLines || sc.actionDescription,
+              narration: scriptScene.narration || sc.narration,
+              mood: scriptScene.mood || sc.mood,
+              visualStyle: scriptScene.visualNotes || sc.visualStyle,
+            };
+          })
+        : scenes;
+
       set((s) => {
         s.sceneMap = {};
         s.noteNodes = [];
         s.motionControls = [];
         s.inputNodes = [];
         s.workflowConnections = [];
-        s.sceneOrder = scenes.map((sc) => {
+        s.sceneOrder = mergedScenes.map((sc) => {
           s.sceneMap[sc.id] = sc;
           return sc.id;
         });
+        syncOutputNodeVisibility(s);
+      });
+      persistLayout(get);
+    },
+
+    clearGraph: () => {
+      set((s) => {
+        s.sceneMap = {};
+        s.sceneOrder = [];
+        s.noteNodes = [];
+        s.motionControls = [];
+        s.inputNodes = [];
+        s.workflowConnections = [];
+        s.hiddenNodeIds = {};
+        s.shownOutputSceneIds = {};
+        s.nodePositions = {};
+        s.nodeColorStyles = {};
         syncOutputNodeVisibility(s);
       });
       persistLayout(get);

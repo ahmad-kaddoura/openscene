@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useProjectStore } from '@/features/project/store';
-import { useChatStore } from '@/features/chat';
+import { useChatStore, buildCreativeWorkflowPlanWithPrompts } from '@/features/chat';
 import { useWorkflowStore } from '@/features/workflow';
 import { useSettingsStore } from '@/features/settings/store';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -10,11 +10,17 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { SpinnerIcon } from '@/components/ui/spinner-icon';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Send, Boxes, Workflow, Wand2, Eye, SlidersHorizontal, Paperclip, X, ArrowRight } from 'lucide-react';
-import { renderGenerativeUI } from './generative-ui';
+import { Send, Boxes, Workflow, Wand2, Eye, SlidersHorizontal, Paperclip, X, ArrowRight, ArrowRightLeft } from 'lucide-react';
+import { renderGenerativeUI, ProductionProgressRail } from './generative-ui';
 import { VideoConfigPanel } from './video-config-panel';
 import ReactMarkdown from 'react-markdown';
-import type { ChatAttachment, CreativeWorkflowPlan, GenerativeUIComponent, Scene, VideoBrief } from '@/core/types';
+import type { ChatAttachment, CreativeWorkflowPlan, GenerativeUIComponent, ProductionStep, ReusableAssetPlan, Scene, VideoBrief, VideoScript } from '@/core/types';
+
+const STARTER_PROMPTS = [
+  'Product ad for my skincare line — premium, no people',
+  'UGC-style creator tutorial with a locked-on-camera host',
+  '15s launch teaser for a new app',
+];
 
 const QUICK_ACTIONS = [
   { label: 'Plan Assets', icon: Boxes, prompt: 'Plan the reusable consistency references, assets, frames, and scenes for this video.' },
@@ -23,7 +29,7 @@ const QUICK_ACTIONS = [
   { label: 'AI Review', icon: Eye, prompt: 'Please review my current video plan and give me your director\'s feedback.' },
 ];
 
-type ChatPhase = 'planning' | 'ready' | 'brainstorm' | 'brief' | 'plan_ready' | 'assets_ready' | 'workflow';
+type ChatPhase = 'planning' | 'ready' | 'brainstorm' | 'brief' | 'plan_ready' | 'assets_ready' | 'workflow' | 'script_ready' | 'influencer_ready' | 'background_ready' | 'frames_ready';
 
 function getAssistantPhase(msg: { metadata?: Record<string, unknown> } | undefined): ChatPhase | null {
   if (!msg?.metadata) return null;
@@ -62,7 +68,7 @@ function GenerativeUIRenderer({
 export function ChatView() {
   const { currentProjectId, getCurrentProject, updateCurrentProject, setPhase } = useProjectStore();
   const { messages, isStreaming, addMessage, setStreaming } = useChatStore();
-  const { buildFromStoryboard } = useWorkflowStore();
+  const { buildFromStoryboard, clearGraph } = useWorkflowStore();
   const generationModels = useSettingsStore((s) => s.settings.generationModels);
   const promptOverrides = useSettingsStore((s) => s.settings.promptOverrides);
   const [input, setInput] = useState('');
@@ -81,6 +87,11 @@ export function ChatView() {
   const planReady = chatPhase === 'plan_ready';
   const assetsReady = chatPhase === 'assets_ready';
   const workflowReady = chatPhase === 'workflow';
+  const scriptReady = chatPhase === 'script_ready';
+  const influencerReady = chatPhase === 'influencer_ready';
+  const backgroundReady = chatPhase === 'background_ready';
+  const framesReady = chatPhase === 'frames_ready';
+  const productionStep = (currentProject?.productionStep ?? (lastAssistant?.metadata?.productionStep as ProductionStep | undefined)) as ProductionStep | undefined;
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -133,6 +144,7 @@ export function ChatView() {
 
       const data = await response.json();
       let shouldOpenWorkflow = data.phase === 'workflow';
+      let shouldClearGraph = false;
 
       if (data.generativeUI) {
         for (const gui of data.generativeUI as GenerativeUIComponent[]) {
@@ -153,6 +165,65 @@ export function ChatView() {
               shouldOpenWorkflow = true;
             }
           }
+          if (gui.type === 'script_card' && gui.data) {
+            const script = gui.data as VideoScript;
+            const concept = script.logline || currentProject?.description || currentProject?.name || 'a short-form video';
+            const fallbackPlan = currentProject?.creativePlan ?? buildCreativeWorkflowPlanWithPrompts(concept, currentProject?.referenceImageUrls ?? []);
+            await updateCurrentProject({
+              videoScript: script,
+              productionStep: 'script',
+              creativePlan: fallbackPlan,
+            });
+          }
+          if (gui.type === 'influencer_card' && gui.data) {
+            const asset = gui.data as ReusableAssetPlan;
+            const project = getCurrentProject();
+            const existingPlan = project?.creativePlan;
+            if (existingPlan) {
+              const updatedPlan: CreativeWorkflowPlan = {
+                ...existingPlan,
+                approvalStatus: 'approved',
+                reusableAssets: existingPlan.reusableAssets.map((a) => (a.id === asset.id ? asset : a)),
+              };
+              await updateCurrentProject({ creativePlan: updatedPlan, productionStep: 'influencer' });
+            }
+          }
+          if (gui.type === 'background_card' && gui.data) {
+            const asset = gui.data as ReusableAssetPlan;
+            const project = getCurrentProject();
+            const existingPlan = project?.creativePlan;
+            if (existingPlan) {
+              const updatedPlan: CreativeWorkflowPlan = {
+                ...existingPlan,
+                approvalStatus: 'approved',
+                reusableAssets: existingPlan.reusableAssets.map((a) => (a.id === asset.id ? asset : a)),
+              };
+              await updateCurrentProject({ creativePlan: updatedPlan, productionStep: 'background' });
+            }
+          }
+          if (gui.type === 'frames_card' && gui.data) {
+            const scenes = (gui.data as { scenes: Scene[] }).scenes;
+            const project = getCurrentProject();
+            const existingPlan = project?.creativePlan;
+            if (existingPlan) {
+              const updatedPlan: CreativeWorkflowPlan = {
+                ...existingPlan,
+                scenes: scenes.map((sc) => ({ ...sc })),
+                approvalStatus: 'assets_generated',
+              };
+              await updateCurrentProject({
+                creativePlan: updatedPlan,
+                productionStep: 'frames',
+                storyboard: {
+                  id: project?.storyboard?.id || `sb-${Date.now()}`,
+                  scenes,
+                  totalDuration: scenes[scenes.length - 1]?.endTime || 0,
+                  narrativeArc: existingPlan.storyStructure.join(' → '),
+                  notes: existingPlan.summary,
+                },
+              });
+            }
+          }
           if (gui.type === 'video_brief_form' && gui.data) {
             await updateCurrentProject({ videoBrief: gui.data as VideoBrief });
           }
@@ -171,6 +242,14 @@ export function ChatView() {
         }
       }
 
+      // If the server marked the script approved via metadata, persist that.
+      if (data.metadata?.approvedScript && currentProject?.videoScript) {
+        await updateCurrentProject({
+          videoScript: { ...currentProject.videoScript, approvalStatus: 'approved' },
+          productionStep: 'influencer',
+        });
+      }
+
       await addMessage(currentProjectId, 'assistant', data.content, data.generativeUI, {
         step: data.step,
         totalSteps: data.totalSteps,
@@ -178,10 +257,23 @@ export function ChatView() {
         model: data.metadata?.model,
         needsConfig: data.metadata?.needsConfig,
         intent: data.metadata?.intent,
+        productionStep: data.metadata?.productionStep,
       });
 
       if (shouldOpenWorkflow) {
+        if (data.skipToWorkflow) {
+          shouldClearGraph = true;
+        } else if (data.seedFromPlan) {
+          const project = getCurrentProject();
+          const plan = project?.creativePlan;
+          if (plan) {
+            buildFromStoryboard(plan.scenes);
+          }
+        }
         await setPhase('workflow');
+        if (shouldClearGraph) {
+          clearGraph();
+        }
       }
     } catch {
       await addMessage(currentProjectId, 'assistant', 'Sorry, I encountered an error. Please try again.');
@@ -198,6 +290,7 @@ export function ChatView() {
     setStreaming,
     updateCurrentProject,
     buildFromStoryboard,
+    clearGraph,
     currentProject,
     getCurrentProject,
     generationModels,
@@ -210,6 +303,11 @@ export function ChatView() {
     },
     [handleSend]
   );
+
+  const handleSkipToWorkflow = useCallback(() => {
+    if (!currentProjectId || isStreaming) return;
+    void handleSend('Skip to workflow — I will build everything manually there.');
+  }, [currentProjectId, isStreaming, handleSend]);
 
   const handleAttachImages = (files: FileList | null) => {
     if (!files?.length) return;
@@ -233,44 +331,86 @@ export function ChatView() {
     }
   };
 
+  const stagedActive: ProductionStep | undefined = productionStep ?? (scriptReady ? 'script' : influencerReady ? 'influencer' : backgroundReady ? 'background' : framesReady ? 'frames' : undefined);
+
   const inputPlaceholder = workflowReady
     ? 'Refine the workflow — ask for scene, asset, prompt, or motion changes…'
-    : assetsReady
-      ? 'Adjust the assets, frames, story, or consistency before opening Workflow…'
-      : chatPhase === 'plan_ready'
-        ? 'Ask for edits, or approve the plan to generate assets step by step…'
-        : 'Describe the video idea, character, product, story, or goal…';
+    : framesReady
+      ? 'Review the frames, regenerate any scene, or approve to open Workflow…'
+      : backgroundReady
+        ? 'Approve the background to generate the start and end frames…'
+        : influencerReady
+          ? 'Approve the influencer to generate the background…'
+          : scriptReady
+            ? 'Read the script, edit any beat, or approve to generate the influencer…'
+            : assetsReady
+              ? 'Adjust the assets, frames, story, or consistency before opening Workflow…'
+              : chatPhase === 'plan_ready'
+                ? 'Ask for edits, or approve the plan to generate assets step by step…'
+                : chatPhase === 'brainstorm' || messages.length > 0
+                  ? 'Reply naturally — describe the video, ask questions, or say when to draft the script…'
+                  : 'Describe the video idea, character, product, story, or goal…';
 
   return (
     <div className="flex flex-col h-full min-h-0">
       <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollRef}>
         <div className="max-w-3xl mx-auto space-y-4">
           {messages.length === 0 && (
-            <div className="text-center py-16">
-              <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-4">
+            <div className="text-center py-14 px-4">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/20 flex items-center justify-center mx-auto mb-4">
                 <Wand2 className="w-6 h-6 text-primary" />
               </div>
-              <h2 className="text-lg font-semibold mb-1">Describe Your Video</h2>
-              <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                Start with the idea. OpenScene will plan reusable assets, scenes, prompts, and workflow nodes before render settings.
+              <h2 className="text-lg font-semibold mb-2">Plan your video together</h2>
+              <p className="text-sm text-muted-foreground max-w-md mx-auto leading-relaxed">
+                Start with a conversation — share the idea, audience, and references. When we&apos;re aligned, I&apos;ll draft a per-second shooting script, then build the influencer, background, and start/end frames step by step.
               </p>
+              <div className="mt-6 flex flex-wrap justify-center gap-2 max-w-lg mx-auto">
+                {STARTER_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => handleSend(prompt)}
+                    disabled={isStreaming}
+                    className="rounded-full border border-border/70 bg-background/80 px-3 py-1.5 text-xs text-left transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:opacity-50"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-muted-foreground gap-1.5"
+                  onClick={handleSkipToWorkflow}
+                  disabled={isStreaming}
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                  Skip to Workflow
+                </Button>
+              </div>
             </div>
           )}
 
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
+              {msg.role === 'assistant' && (
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/15 flex items-center justify-center shrink-0 mt-0.5">
+                  <Wand2 className="w-4 h-4 text-primary" />
+                </div>
+              )}
               <div
                 className={`max-w-[85%] rounded-2xl px-4 py-3 ${
                   msg.role === 'user'
                     ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted/50 border border-border'
+                    : 'bg-card border border-border/60 shadow-sm'
                 }`}
               >
                 {msg.role === 'assistant' ? (
-                  <div className="prose prose-sm prose-invert max-w-none [&>p]:mb-2 [&>p:last-child]:mb-0 [&>ul]:mb-2 [&>ol]:mb-2 [&>strong]:text-foreground [&_li]:text-sm">
+                  <div className="prose prose-sm dark:prose-invert max-w-none [&>p]:mb-2 [&>p:last-child]:mb-0 [&>ul]:mb-2 [&>ol]:mb-2 [&>strong]:text-foreground [&_li]:text-sm [&_li]:text-muted-foreground">
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
                 ) : (
@@ -309,8 +449,11 @@ export function ChatView() {
           ))}
 
           {isStreaming && (
-            <div className="flex justify-start">
-              <div className="bg-muted/50 border border-border rounded-2xl px-4 py-3">
+            <div className="flex justify-start gap-3">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/15 flex items-center justify-center shrink-0">
+                <Wand2 className="w-4 h-4 text-primary" />
+              </div>
+              <div className="bg-card border border-border/60 shadow-sm rounded-2xl px-4 py-3">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <SpinnerIcon className="w-4 h-4 animate-spin" />
                   Thinking...
@@ -320,6 +463,15 @@ export function ChatView() {
           )}
         </div>
       </ScrollArea>
+
+      {/* Production progress rail */}
+      {stagedActive && (
+        <div className="px-4 pb-2 shrink-0">
+          <div className="max-w-3xl mx-auto">
+            <ProductionProgressRail current={stagedActive} />
+          </div>
+        </div>
+      )}
 
       {/* Next steps banner after a creative workflow is ready */}
       {(planReady || assetsReady || workflowReady) && (
@@ -366,7 +518,7 @@ export function ChatView() {
         </div>
       )}
 
-      {messages.length > 0 && (
+      {messages.length > 0 && !planReady && !assetsReady && !workflowReady && (
         <div className="px-4 pb-2 shrink-0">
           <div className="max-w-3xl mx-auto flex gap-2 overflow-x-auto pb-1">
             {QUICK_ACTIONS.map((action) => (
@@ -382,6 +534,17 @@ export function ChatView() {
                 {action.label}
               </Button>
             ))}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="whitespace-nowrap gap-1.5 text-xs shrink-0 text-muted-foreground"
+              onClick={handleSkipToWorkflow}
+              disabled={isStreaming}
+              title="Open a blank workflow and build everything manually"
+            >
+              <ArrowRightLeft className="w-3 h-3" />
+              Skip to Workflow
+            </Button>
           </div>
         </div>
       )}
