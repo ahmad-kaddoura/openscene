@@ -34,6 +34,11 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { ChatView, buildCreativeWorkflowPlanWithPrompts, useChatStore } from "@/features/chat";
 import { WorkflowView, useWorkflowStore } from "@/features/workflow";
 import { TimelineView } from "@/features/timeline/timeline-view";
@@ -438,8 +443,8 @@ function AgentWorkspace({
             size="icon"
             className="h-9 w-9 rounded-full text-slate-600"
             onClick={() => setChatOpen((value) => !value)}
-            aria-label={chatOpen ? "Hide agent chat" : "Show agent chat"}
-            title={chatOpen ? "Hide agent chat" : "Show agent chat"}
+            aria-label={chatOpen ? "Hide planning panel" : "Show planning panel"}
+            title={chatOpen ? "Hide planning panel" : "Show planning panel"}
           >
             <MessageSquareText className="h-4 w-4" />
           </Button>
@@ -468,27 +473,45 @@ function AgentWorkspace({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1 overflow-hidden">
         {chatOpen && (
-          <aside className="min-h-0 w-[360px] shrink-0 border-r border-slate-200 bg-white 2xl:w-[390px]">
-            <ChatView />
-          </aside>
+          <>
+            <ResizablePanel
+              defaultSize={28}
+              minSize={18}
+              maxSize={46}
+              className="min-w-[300px] max-w-[620px] border-r border-slate-200 bg-white"
+            >
+              <ChatView />
+            </ResizablePanel>
+            <ResizableHandle withHandle className="bg-slate-200 hover:bg-cyan-300" />
+          </>
         )}
-        <main className="min-w-0 flex-1 overflow-hidden bg-white">
-          {project.currentPhase === "workflow" ? (
-            <WorkflowView />
-          ) : project.currentPhase === "timeline" ? (
-            <TimelineView />
-          ) : (
-            <ArtifactPreview project={project} spacious={!chatOpen && !inspectorOpen} compact={chatOpen && inspectorOpen && !contentMode} />
-          )}
-        </main>
+        <ResizablePanel defaultSize={inspectorOpen ? (chatOpen ? 50 : 78) : chatOpen ? 72 : 100} minSize={34}>
+          <main className="h-full min-w-0 overflow-hidden bg-white">
+            {project.currentPhase === "workflow" ? (
+              <WorkflowView />
+            ) : project.currentPhase === "timeline" ? (
+              <TimelineView />
+            ) : (
+              <ArtifactPreview project={project} spacious={!chatOpen && !inspectorOpen} compact={chatOpen && inspectorOpen && !contentMode} />
+            )}
+          </main>
+        </ResizablePanel>
         {inspectorOpen && (
-          <aside className="min-h-0 w-[320px] shrink-0 border-l border-slate-200 bg-white 2xl:w-[360px]">
-            <WorkspaceInspector project={project} progress={progress} />
-          </aside>
+          <>
+            <ResizableHandle withHandle className="bg-slate-200 hover:bg-cyan-300" />
+            <ResizablePanel
+              defaultSize={22}
+              minSize={16}
+              maxSize={36}
+              className="min-w-[280px] max-w-[520px] border-l border-slate-200 bg-white"
+            >
+              <WorkspaceInspector project={project} progress={progress} />
+            </ResizablePanel>
+          </>
         )}
-      </div>
+      </ResizablePanelGroup>
     </div>
   );
 }
