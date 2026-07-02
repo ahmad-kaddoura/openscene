@@ -851,6 +851,14 @@ export const useWorkflowStore = create<WorkflowState>()(
       const generationModels = settings.generationModels;
       const controller = registerGenerationAbortController(id);
 
+      const project = useProjectStore.getState().getCurrentProject();
+      const frameReq = project?.creativePlan?.progress?.sceneFrameRequirements.find((r) => r.sceneId === id);
+      const needsEndFrame = frameReq?.needsEndFrame ?? true;
+      const orderedScenes = Object.values(get().sceneMap).sort((a, b) => a.order - b.order);
+      const sceneIndex = orderedScenes.findIndex((s) => s.id === id);
+      const priorScene = sceneIndex > 0 ? orderedScenes[sceneIndex - 1] : undefined;
+      const priorSceneEndFrameUrl = priorScene?.endFrameUrl ?? priorScene?.generatedEndFrameUrl;
+
       set((s) => {
         if (s.sceneMap[id]) {
           s.sceneMap[id].status = 'generating';
@@ -887,6 +895,8 @@ export const useWorkflowStore = create<WorkflowState>()(
             promptOverrides: useSettingsStore.getState().settings.promptOverrides,
             existingTaskId: isResume ? scene.generationTaskId : undefined,
             existingModel: scene.generationModel,
+            needsEndFrame,
+            priorSceneEndFrameUrl,
             onTaskSubmitted: async (taskId, model) => {
               set((s) => {
                 if (!s.sceneMap[id]) return;
@@ -914,7 +924,6 @@ export const useWorkflowStore = create<WorkflowState>()(
         );
 
         const versionId = nanoid();
-        const project = useProjectStore.getState().getCurrentProject();
         set((s) => {
           if (!s.sceneMap[id]) return;
           const sc = s.sceneMap[id];

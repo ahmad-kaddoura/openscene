@@ -464,7 +464,7 @@ export async function submitQwenVideoTask(
         prompt: options.prompt,
         img_url: options.startFrameUrl,
         first_frame_url: options.startFrameUrl,
-        last_frame_url: options.endFrameUrl,
+        ...(options.endFrameUrl ? { last_frame_url: options.endFrameUrl } : {}),
         video_url: options.referenceVideoUrl,
         ref_video_url: options.referenceVideoUrl,
         reference_video_url: options.referenceVideoUrl,

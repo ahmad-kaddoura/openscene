@@ -263,7 +263,19 @@ export function buildFallbackVideoScriptFromPlan(
   return buildFallbackVideoScript(concept || plan.concept, plan.scenes, duration);
 }
 
-export function getScriptFromJson(raw: string): VideoScript | null {
+export function clampScriptToSceneCount(script: VideoScript, targetCount: number): VideoScript {
+  if (targetCount < 1 || script.scenes.length === targetCount) return script;
+
+  if (script.scenes.length > targetCount) {
+    const trimmed = script.scenes.slice(0, targetCount);
+    const durationSeconds = trimmed.reduce((sum, sc) => sum + sc.durationSeconds, 0);
+    return { ...script, scenes: trimmed, sceneCount: targetCount, durationSeconds };
+  }
+
+  return { ...script, sceneCount: script.scenes.length };
+}
+
+export function getScriptFromJson(raw: string, expectedSceneCount?: number): VideoScript | null {
   try {
     const trimmed = raw.trim().replace(/^```json\s*|\s```$/g, '');
     const parsed = JSON.parse(trimmed);
@@ -288,7 +300,7 @@ export function getScriptFromJson(raw: string): VideoScript | null {
       mood: String(sc.mood ?? ''),
       visualNotes: String(sc.visualNotes ?? ''),
     }));
-    return {
+    const script: VideoScript = {
       id: `script-${Date.now()}`,
       logline: String(parsed.logline ?? ''),
       durationSeconds: Number(parsed.durationSeconds) || scenes.reduce((sum, sc) => sum + sc.durationSeconds, 0),
@@ -297,6 +309,7 @@ export function getScriptFromJson(raw: string): VideoScript | null {
       scenes,
       approvalStatus: 'draft',
     };
+    return expectedSceneCount ? clampScriptToSceneCount(script, expectedSceneCount) : script;
   } catch {
     return null;
   }
@@ -325,9 +338,62 @@ export function extractConceptFromMessages(messages: { role: string; content: st
     .map((m) => m.content)
     .filter((c) => !isGreetingOrSmallTalk(c))
     .filter((c) => !/^\d+:\d+|aspect ratio|fps|resolution|\d+ seconds?$/i.test(c))
+    .filter((c) => !/^\d+\s*scenes?$/i.test(c.trim()))
     .slice(-5)
     .join(' ')
     .trim();
+}
+
+const WORD_TO_NUMBER: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+};
+
+/** Parse explicit scene-count intent from a single message (e.g. "2 scenes", "only two scenes"). */
+export function extractSceneCountFromText(text: string): number | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const digitMatch = trimmed.match(/\b(?:only|just|exactly|make|use|want|need|with)?\s*(\d{1,2})\s*(?:-?\s*)?(?:scene|scenes|shot|shots)\b/i);
+  if (digitMatch) {
+    const n = Number(digitMatch[1]);
+    if (n >= 1 && n <= 20) return n;
+  }
+
+  const wordMatch = trimmed.match(/\b(?:only|just|exactly|make|use|want|need|with)?\s*(one|two|three|four|five|six|seven|eight|nine|ten)\s+scenes?\b/i);
+  if (wordMatch) {
+    const n = WORD_TO_NUMBER[wordMatch[1].toLowerCase()];
+    if (n) return n;
+  }
+
+  if (/^\d+\s*scenes?$/i.test(trimmed)) {
+    const n = Number(trimmed.match(/\d+/)?.[0]);
+    if (n >= 1 && n <= 20) return n;
+  }
+
+  return null;
+}
+
+/** Resolve scene count from conversation answers and project brief — newest user intent wins. */
+export function resolvePreferredSceneCount(
+  messages: { role: string; content: string }[],
+  project?: { videoBrief?: Partial<VideoBrief> } | null,
+): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.role !== 'user') continue;
+    const parsed = extractSceneCountFromText(msg.content);
+    if (parsed) return parsed;
+  }
+
+  const briefCount = project?.videoBrief?.numberOfScenes;
+  if (briefCount && briefCount >= 1 && briefCount <= 20) return briefCount;
+
+  return 4;
+}
+
+export interface PlanBuildOptions {
+  sceneCount?: number;
+  durationSeconds?: number;
 }
 
 export function buildBriefFromProject(
@@ -429,14 +495,19 @@ export function buildStoryboardScenes(
   });
 }
 
+function hasExplicitProductIntent(text: string): boolean {
+  return /\b(product|packaging|packshot|bottle|jar|device|shoe|watch|sku|unbox|my (?:product|brand|line|device|app|skincare line|serum|lipstick|foundation|cream))\b/.test(text)
+    || /\b(product shot|hero shot|showcase (?:the|my|this) product|sell(?:ing)? (?:the|my|this) product|launch(?:ing)? (?:the|my|this) product)\b/.test(text);
+}
+
 function inferVideoMode(concept: string, referenceImageUrls: string[] = []): VideoPlanningMode {
   const lower = concept.toLowerCase();
   const explicitHuman = /influencer|creator|person|people|human|woman|female|man|male|model|actor|face|host|spokesperson|ugc/.test(lower);
-  const productSignal = /product|packaging|bottle|jar|device|shoe|watch|cosmetic|lipstick|foundation|serum|cream|brand|commercial|hero shot|product shot/.test(lower);
-  const influencerSignal = explicitHuman && /influencer|creator|ugc|host|spokesperson|tutorial|try on|try-on|makeup on|putting makeup|applying|reviewer/.test(lower);
+  const productSignal = hasExplicitProductIntent(lower);
+  const influencerSignal = explicitHuman && /influencer|creator|ugc|host|spokesperson|tutorial|try on|try-on|makeup on|putting makeup|applying|reviewer|grwm|get ready|vlog|day in|lifestyle/.test(lower);
   if (productSignal && influencerSignal) return 'hybrid';
   if (influencerSignal) return 'influencer';
-  if (productSignal || referenceImageUrls.length > 0) return 'product';
+  if (productSignal || (referenceImageUrls.length > 0 && !explicitHuman)) return 'product';
   return explicitHuman ? 'influencer' : 'general';
 }
 
@@ -444,7 +515,7 @@ function inferAssetNeeds(concept: string, mode: VideoPlanningMode, referenceImag
   const lower = concept.toLowerCase();
   const assets: ReusableAssetPlan[] = [];
   const needsInfluencer = mode === 'influencer' || mode === 'hybrid';
-  const needsProduct = mode === 'product' || mode === 'hybrid' || /product|make\s*up|makeup|cosmetic|lipstick|foundation|serum|cream|brand/.test(lower) || referenceImageUrls.length > 0;
+  const needsProduct = mode === 'product' || mode === 'hybrid' || (hasExplicitProductIntent(lower) && mode !== 'influencer');
 
   if (needsInfluencer) {
     assets.push({
@@ -615,27 +686,93 @@ function scene(
   };
 }
 
-function buildProductScenes(concept: string, assetIds: string[], referenceImageUrls: string[], promptOverrides?: PromptOverrides): Scene[] {
-  const coreAssets = assetIds.filter((id) => !id.includes('influencer'));
-  return [
-    scene(1, 'Product Hero Establish', 'Open with a precise hero shot that makes the product instantly recognizable.', concept, 4, 0, 'slow_push_in', 'Camera pushes toward the product on the brand-aligned surface with props framing it cleanly.', coreAssets, 'product', promptOverrides),
-    scene(2, 'Feature / Texture Detail', 'Show the product material, texture, applicator, or key feature without adding human subjects.', concept, 6, 4, 'close_up', 'Macro movement reveals the product detail, finish, packaging edge, or functional benefit.', coreAssets, 'product', promptOverrides),
-    scene(3, 'Environment / Use Case', 'Place the same product in a relevant environment while preserving product and brand continuity.', concept, 6, 10, 'orbit', 'Camera orbits gently around the product with related props and consistent lighting.', coreAssets, 'product', promptOverrides),
-    scene(4, 'Final Brand CTA', 'End with a clean product packshot and final branded composition.', concept, 4, 16, 'static', 'Product holds center frame with controlled negative space for a final CTA or tagline.', coreAssets, 'product', promptOverrides),
-  ].map((sc) => ({ ...sc, referenceImageUrls }));
+interface SceneTemplate {
+  title: string;
+  goal: string;
+  cameraMovement: Scene['cameraMovement'];
+  action: string;
+  includeProduct?: boolean;
 }
 
-function buildInfluencerScenes(concept: string, assetIds: string[], referenceImageUrls: string[], mode: VideoPlanningMode, promptOverrides?: PromptOverrides): Scene[] {
+const PRODUCT_SCENE_TEMPLATES: SceneTemplate[] = [
+  { title: 'Product Hero Establish', goal: 'Open with a precise hero shot that makes the product instantly recognizable.', cameraMovement: 'slow_push_in', action: 'Camera pushes toward the product on the brand-aligned surface with props framing it cleanly.' },
+  { title: 'Feature / Texture Detail', goal: 'Show the product material, texture, applicator, or key feature without adding human subjects.', cameraMovement: 'close_up', action: 'Macro movement reveals the product detail, finish, packaging edge, or functional benefit.' },
+  { title: 'Environment / Use Case', goal: 'Place the same product in a relevant environment while preserving product and brand continuity.', cameraMovement: 'orbit', action: 'Camera orbits gently around the product with related props and consistent lighting.' },
+  { title: 'Final Brand CTA', goal: 'End with a clean product packshot and final branded composition.', cameraMovement: 'static', action: 'Product holds center frame with controlled negative space for a final CTA or tagline.' },
+];
+
+const INFLUENCER_SCENE_TEMPLATES: SceneTemplate[] = [
+  { title: 'Hook / Identity Establish', goal: 'Open by locking the influencer identity and the starting context.', cameraMovement: 'slow_push_in', action: 'The influencer looks into camera in the established environment and sets up the story.' },
+  { title: 'Action / Proof Beat', goal: 'Show the key creator action while preserving face, hair, outfit, body style, and background continuity.', cameraMovement: 'close_up', action: 'The influencer performs the main action in a satisfying close-up with smooth movement.', includeProduct: true },
+  { title: 'Reveal / Payoff', goal: 'Deliver the visual payoff with the same influencer identity and related scene continuity.', cameraMovement: 'dolly_in', action: 'The influencer turns toward the light or camera to reveal the completed moment.' },
+  { title: 'CTA / Final Moment', goal: 'End with a clean creator moment that preserves the locked identity.', cameraMovement: 'static', action: 'The influencer holds the final pose with stable composition and natural eye contact.', includeProduct: true },
+];
+
+function pickSceneTemplates(templates: SceneTemplate[], count: number): SceneTemplate[] {
+  if (count <= 0) return templates.slice(0, 1);
+  if (count === 1) return [templates[0]];
+  if (count === templates.length) return templates;
+  if (count < templates.length) {
+    return Array.from({ length: count }, (_, i) => {
+      const idx = Math.round(i * (templates.length - 1) / (count - 1));
+      return templates[idx];
+    });
+  }
+  return Array.from({ length: count }, (_, i) => templates[Math.min(i, templates.length - 1)]);
+}
+
+function buildScenesForMode(
+  count: number,
+  mode: VideoPlanningMode,
+  concept: string,
+  assetIds: string[],
+  referenceImageUrls: string[],
+  totalDuration: number,
+  promptOverrides?: PromptOverrides,
+): Scene[] {
+  const isProduct = mode === 'product';
+  const templates = pickSceneTemplates(isProduct ? PRODUCT_SCENE_TEMPLATES : INFLUENCER_SCENE_TEMPLATES, count);
+  const sceneDuration = Math.max(3, Math.round(totalDuration / count));
   const productIds = assetIds.filter((id) => id.includes('product'));
   const influencerIds = assetIds.filter((id) => id.includes('influencer') || id.includes('background') || id.includes('visual-style'));
-  const allAssets = [...influencerIds, ...productIds];
+  const coreAssets = assetIds.filter((id) => !id.includes('influencer'));
+  const sceneMode = isProduct ? 'product' as const : mode;
 
-  return [
-    scene(1, 'Hook / Identity Establish', 'Open by locking the influencer identity and the starting context.', concept, 4, 0, 'slow_push_in', 'The influencer looks into camera in the established environment and sets up the story.', influencerIds, mode, promptOverrides),
-    scene(2, 'Action / Proof Beat', 'Show the key creator action while preserving face, hair, outfit, body style, and background continuity.', concept, 7, 4, 'close_up', 'The influencer performs the main action in a satisfying close-up with smooth movement.', allAssets, mode, promptOverrides),
-    scene(3, 'Reveal / Payoff', 'Deliver the visual payoff with the same influencer identity and related scene continuity.', concept, 5, 11, 'dolly_in', 'The influencer turns toward the light or camera to reveal the completed moment.', influencerIds, mode, promptOverrides),
-    scene(4, 'CTA / Final Moment', 'End with a clean creator or product-supported CTA that still preserves the locked identity.', concept, 4, 16, 'static', 'The influencer holds the final pose or product moment with stable composition.', allAssets, mode, promptOverrides),
-  ].map((sc) => ({ ...sc, referenceImageUrls }));
+  let t = 0;
+  return templates.map((tpl, index) => {
+    let assetsUsed: string[];
+    if (isProduct) {
+      assetsUsed = coreAssets;
+    } else if (tpl.includeProduct && productIds.length > 0) {
+      assetsUsed = [...influencerIds, ...productIds];
+    } else {
+      assetsUsed = influencerIds;
+    }
+
+    const sc = scene(
+      index + 1,
+      tpl.title,
+      tpl.goal,
+      concept,
+      sceneDuration,
+      t,
+      tpl.cameraMovement,
+      tpl.action,
+      assetsUsed,
+      sceneMode,
+      promptOverrides,
+    );
+    t += sceneDuration;
+    return { ...sc, referenceImageUrls };
+  });
+}
+
+function buildProductScenes(concept: string, assetIds: string[], referenceImageUrls: string[], sceneCount: number, durationSeconds: number, promptOverrides?: PromptOverrides): Scene[] {
+  return buildScenesForMode(sceneCount, 'product', concept, assetIds, referenceImageUrls, durationSeconds, promptOverrides);
+}
+
+function buildInfluencerScenes(concept: string, assetIds: string[], referenceImageUrls: string[], mode: VideoPlanningMode, sceneCount: number, durationSeconds: number, promptOverrides?: PromptOverrides): Scene[] {
+  return buildScenesForMode(sceneCount, mode, concept, assetIds, referenceImageUrls, durationSeconds, promptOverrides);
 }
 
 function buildConsistencyReferences(planId: string, mode: VideoPlanningMode, assets: ReusableAssetPlan[], sceneIds: string[]): ConsistencyReference[] {
@@ -664,14 +801,17 @@ export function buildCreativeWorkflowPlanWithPrompts(
   concept: string,
   referenceImageUrls: string[] = [],
   promptOverrides?: PromptOverrides,
+  options?: PlanBuildOptions,
 ): CreativeWorkflowPlan {
   const safeConcept = concept || 'a short video concept';
   const videoMode = inferVideoMode(safeConcept, referenceImageUrls);
   const assets = inferAssetNeeds(safeConcept, videoMode, referenceImageUrls, promptOverrides);
   const assetIds = assets.map((asset) => asset.id);
+  const sceneCount = Math.max(1, Math.min(20, options?.sceneCount ?? 4));
+  const durationSeconds = options?.durationSeconds ?? 20;
   const scenes = videoMode === 'product'
-    ? buildProductScenes(safeConcept, assetIds, referenceImageUrls, promptOverrides)
-    : buildInfluencerScenes(safeConcept, assetIds, referenceImageUrls, videoMode, promptOverrides);
+    ? buildProductScenes(safeConcept, assetIds, referenceImageUrls, sceneCount, durationSeconds, promptOverrides)
+    : buildInfluencerScenes(safeConcept, assetIds, referenceImageUrls, videoMode, sceneCount, durationSeconds, promptOverrides);
   const planId = `plan-${Date.now()}`;
   const consistencyReferences = buildConsistencyReferences(planId, videoMode, assets, scenes.map((sc) => sc.id));
   const isProduct = videoMode === 'product';
@@ -707,9 +847,20 @@ export function buildCreativeWorkflowPlanWithPrompts(
     ],
     renderSettingsDeferred: true,
     suggestedAspectRatio: '9:16',
-    suggestedDuration: scenes[scenes.length - 1]?.endTime ?? 20,
+    suggestedDuration: scenes[scenes.length - 1]?.endTime ?? durationSeconds,
     outputFormat: 'mp4',
     approvalStatus: 'draft',
+    progress: {
+      completedSteps: [],
+      pendingSteps: ['approve_plan', 'generate_assets', 'generate_frames', 'open_workflow'],
+      missingInputs: [],
+      sceneFrameRequirements: scenes.map((s) => ({
+        sceneId: s.id,
+        needsStartFrame: true,
+        needsEndFrame: true,
+      })),
+      updatedAt: new Date().toISOString(),
+    },
   };
 }
 

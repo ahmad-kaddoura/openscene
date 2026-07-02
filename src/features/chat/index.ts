@@ -24,6 +24,10 @@ export {
   buildFallbackVideoScript,
   buildFallbackVideoScriptFromPlan,
   getScriptFromJson,
+  extractSceneCountFromText,
+  resolvePreferredSceneCount,
+  clampScriptToSceneCount,
   type ChatIntent,
   type ScriptBuildInput,
+  type PlanBuildOptions,
 } from './lib/chat-handlers';

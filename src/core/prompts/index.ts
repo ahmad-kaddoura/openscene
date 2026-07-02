@@ -98,6 +98,7 @@ Return ONLY a JSON object that matches this TypeScript type exactly:
 
 Hard rules:
 - Total scenes = {{sceneCount}}, total duration = {{durationSeconds}}s, format = {{aspectRatio}}, mode = {{videoMode}}.
+- If the user specified a scene count, you MUST return exactly that many scenes — never default to 4 or 20.
 - Each scene's durationSeconds must sum to {{durationSeconds}} across scenes.
 - Produce exactly one beat per second inside each scene (beats length === durationSeconds).
 - Each beat must describe what the subject DOES, SAYS, and how they BEHAVE that second, plus a camera note. No filler, no clichés.
@@ -272,7 +273,7 @@ Only transfer body pose, gesture, and timing from the video.`,
     name: 'Product motion prompt',
     description: 'Template for product-led scene motion.',
     variables: ['action'],
-    defaultValue: 'Animate {{action}} with smooth product-focused camera movement, stable product geometry, consistent props, and no human elements unless explicitly requested.',
+    defaultValue: 'Animate {{action}} with smooth product-focused camera movement, stable product geometry, consistent props, and no human elements unless explicitly requested. Interpolate smoothly from the start frame to the end frame composition.',
   },
   {
     id: 'video.influencer.motion',
@@ -280,7 +281,7 @@ Only transfer body pose, gesture, and timing from the video.`,
     name: 'Influencer motion prompt',
     description: 'Template for creator-led scene motion.',
     variables: ['action'],
-    defaultValue: 'Animate {{action}} with controlled creator-style movement, stable facial identity, same outfit and background, natural motion, and no sudden camera jumps.',
+    defaultValue: 'Animate {{action}} with controlled creator-style movement, stable facial identity, same outfit and background, natural motion, and no sudden camera jumps. Interpolate smoothly from the start frame to the end frame composition.',
   },
   {
     id: 'prompt.enhance.cinematic',
@@ -490,7 +491,9 @@ Decide between three actions and respond with a single JSON object only:
 
 Hard rules:
 - Treat user-provided attachment images as source-of-truth references. Note which asset each attachment maps to.
+- If the user specifies a scene count (e.g. "2 scenes"), the plan MUST contain exactly that many scenes.
 - For product videos, do not add human subjects unless the user explicitly asks for people, influencers, hands, models, or UGC.
+- For influencer-only videos (tutorials, GRWM, makeup application, lifestyle vlogs), do NOT add product assets unless the user explicitly names a product, brand, or item to feature.
 - For influencer videos, treat identity consistency as critical: same face, hairstyle, hair color, outfit, body style, and overall identity across scenes.
 - Preserve product design, packaging, material, color, shape, scale, label placement, and brand details.
 - Connected scenes must share background, lighting, camera language, visual style, and coherent transitions.

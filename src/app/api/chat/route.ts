@@ -35,6 +35,9 @@ import {
   wantsFramesStep,
   buildFallbackVideoScriptFromPlan,
   getScriptFromJson,
+  resolvePreferredSceneCount,
+  clampScriptToSceneCount,
+  extractSceneCountFromText,
 } from '@/features/chat';
 import { resolvePrompt } from '@/core/prompts';
 import {
@@ -56,7 +59,19 @@ interface ResolvedParameterValue {
   label: string;
 }
 
-type ProjectSettingsLike = { aspectRatio?: string; duration?: number };
+type ProjectSettingsLike = { aspectRatio?: string; duration?: number; numberOfScenes?: number };
+
+function buildPlanOptions(project: any, convo: { role: string; content: string }[]) {
+  const settings = settingsFromProject(project);
+  return {
+    sceneCount: resolvePreferredSceneCount(convo, project),
+    durationSeconds: settings.duration || 20,
+  };
+}
+
+function isRealFrameUrl(url?: string): boolean {
+  return Boolean(url && !url.startsWith('data:image/svg+xml'));
+}
 
 // Resolves the current "set" value for a parameter question, so the UI can show
 // a "use the set value" button. Falls back to project settings when the plan
@@ -68,6 +83,8 @@ function resolveParameterValue(
   scenes: Scene[] | undefined,
 ): ResolvedParameterValue | null {
   if (key === 'sceneCount') {
+    const briefCount = settings?.numberOfScenes;
+    if (briefCount && briefCount > 0) return { value: `${briefCount} scenes`, label: `${briefCount} scenes (from brief)` };
     const count = scenes?.length ?? plan?.scenes?.length;
     if (count && count > 0) return { value: `${count} scenes`, label: `${count} scenes (from current plan)` };
     return null;
@@ -288,6 +305,7 @@ async function generateSceneFrames(
   plan: CreativeWorkflowPlan,
   config: QwenConfig | null,
   promptOverrides?: PromptOverrides,
+  priorEndFrameUrl?: string,
 ): Promise<Scene> {
   if (!config) {
     return { ...scene, frameGenerationStatus: 'pending' };
@@ -295,23 +313,44 @@ async function generateSceneFrames(
   if (scene.frameGenerationStatus === 'generated' && scene.generatedStartFrameUrl) {
     return scene;
   }
+
+  const frameReq = plan.progress?.sceneFrameRequirements.find((r) => r.sceneId === scene.id);
+  const needsStartFrame = frameReq?.needsStartFrame ?? true;
+  const needsEndFrame = frameReq?.needsEndFrame ?? true;
+
   try {
-    const start = await generateImageWithRetry(config, framePrompt(scene, 'start', plan, promptOverrides), {
-      model: config.frameModel,
-      negativePrompt: scene.negativePrompt || scene.avoid,
-    });
-    const end = await generateImageWithRetry(config, framePrompt(scene, 'end', plan, promptOverrides), {
-      model: config.frameModel,
-      negativePrompt: scene.negativePrompt || scene.avoid,
-    });
+    let startUrl: string | undefined;
+    if (needsStartFrame) {
+      const startPrompt = priorEndFrameUrl
+        ? `${framePrompt(scene, 'start', plan, promptOverrides)}\n\nVisual continuity: continue naturally from the previous scene's end frame composition.`
+        : framePrompt(scene, 'start', plan, promptOverrides);
+      const start = await generateImageWithRetry(config, startPrompt, {
+        model: config.frameModel,
+        negativePrompt: scene.negativePrompt || scene.avoid,
+      });
+      startUrl = start.url;
+    }
+
+    let endUrl: string | undefined;
+    if (needsEndFrame) {
+      const endPrompt = startUrl
+        ? `${framePrompt(scene, 'end', plan, promptOverrides)}\n\nVisual continuity: this end frame must be a natural continuation of the start frame — same subject, outfit, background, and lighting. The video model will interpolate between them.`
+        : framePrompt(scene, 'end', plan, promptOverrides);
+      const end = await generateImageWithRetry(config, endPrompt, {
+        model: config.frameModel,
+        negativePrompt: scene.negativePrompt || scene.avoid,
+      });
+      endUrl = end.url;
+    }
+
     return {
       ...scene,
-      startFrameUrl: start.url,
-      endFrameUrl: end.url,
-      generatedStartFrameUrl: start.url,
-      generatedEndFrameUrl: end.url,
+      startFrameUrl: startUrl,
+      endFrameUrl: endUrl,
+      generatedStartFrameUrl: startUrl,
+      generatedEndFrameUrl: endUrl,
       frameGenerationStatus: 'generated',
-      frameGenerationModel: start.model,
+      frameGenerationModel: config.frameModel,
       frameGenerationError: undefined,
     };
   } catch (error) {
@@ -325,12 +364,14 @@ async function generateSceneFrames(
   }
 }
 
-function settingsFromProject(project: any): { aspectRatio?: string; duration?: number } {
+function settingsFromProject(project: any): ProjectSettingsLike {
   const s = (project?.settings ?? {}) as Partial<ProjectSettings>;
-  const briefDuration = project?.videoBrief?.duration as number | undefined;
+  const brief = project?.videoBrief as Partial<VideoBrief> | undefined;
+  const briefDuration = brief?.duration as number | undefined;
   return {
     aspectRatio: s.aspectRatio,
     duration: briefDuration,
+    numberOfScenes: brief?.numberOfScenes,
   };
 }
 
@@ -735,7 +776,11 @@ export async function POST(req: NextRequest) {
     }
 
     // --- Staged production flow (default path) ---
-    const fallbackPlan = existingPlan ?? buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides);
+    const planOptions = buildPlanOptions(project, convo);
+    const sceneCountChanged = Boolean(extractSceneCountFromText(lastUser));
+    const fallbackPlan = existingPlan && !(sceneCountChanged && existingPlan.scenes.length !== planOptions.sceneCount)
+      ? existingPlan
+      : buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides, planOptions);
     const presentScript = shouldPresentScript(lastUser, convo, refs);
     const wantsInfluencer = wantsInfluencerStep(lastUser);
     const wantsBackground = wantsBackgroundStep(lastUser);
@@ -766,38 +811,41 @@ export async function POST(req: NextRequest) {
 
     // 2) Generate the script (no images yet)
     if (presentScript && !existingScript) {
-      const sceneCount = fallbackPlan.scenes.length;
+      const sceneCount = planOptions.sceneCount;
       const durationSeconds = settings.duration || fallbackPlan.suggestedDuration || fallbackPlan.scenes.reduce((s, sc) => s + sc.duration, 0);
       const aspectRatio = settings.aspectRatio || fallbackPlan.suggestedAspectRatio || '9:16';
+      const scriptPlan = fallbackPlan.scenes.length === sceneCount
+        ? fallbackPlan
+        : buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides, { ...planOptions, sceneCount });
       if (config) {
         try {
           const scriptSystem = resolvePrompt(
             'planning.script.system',
-            { sceneCount, durationSeconds, aspectRatio, videoMode: fallbackPlan.videoMode },
+            { sceneCount, durationSeconds, aspectRatio, videoMode: scriptPlan.videoMode },
             promptOverrides,
           );
           const result = await callQwenChat(
             config,
             [
               { role: 'system', content: scriptSystem },
-              { role: 'user', content: `Concept: ${concept || lastUser}\n\nReturn the JSON script now.` },
+              { role: 'user', content: `Concept: ${concept || lastUser}\n\nThe user wants exactly ${sceneCount} scene(s). Return the JSON script now.` },
             ],
             { jsonMode: true, maxTokens: 1800 },
           );
-          const parsed = getScriptFromJson(result.content);
+          const parsed = getScriptFromJson(result.content, sceneCount);
           if (parsed) {
-            return scriptResponse(parsed, { model: config.model, tokens: result.usage?.total_tokens, planId: fallbackPlan.id });
+            return scriptResponse(parsed, { model: config.model, tokens: result.usage?.total_tokens, planId: scriptPlan.id });
           }
-          const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, fallbackPlan, settings);
-          return scriptResponse(fallback, { model: 'fallback', reason: 'json_parse' });
+          const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, scriptPlan, settings);
+          return scriptResponse(clampScriptToSceneCount(fallback, sceneCount), { model: 'fallback', reason: 'json_parse' });
         } catch (err) {
           const qErr = err as QwenCallError;
-          const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, fallbackPlan, settings);
-          return scriptResponse(fallback, { model: 'fallback', error: qErr.kind, notice: qErr.message });
+          const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, scriptPlan, settings);
+          return scriptResponse(clampScriptToSceneCount(fallback, sceneCount), { model: 'fallback', error: qErr.kind, notice: qErr.message });
         }
       }
-      const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, fallbackPlan, settings);
-      return scriptResponse(fallback, { model: 'unconfigured', needsConfig: true });
+      const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, scriptPlan, settings);
+      return scriptResponse(clampScriptToSceneCount(fallback, sceneCount), { model: 'unconfigured', needsConfig: true });
     }
 
     // 3) Generate the influencer
@@ -872,8 +920,13 @@ export async function POST(req: NextRequest) {
       }
 
       const scenesWithFrames: Scene[] = [];
+      let priorEndFrameUrl: string | undefined;
       for (const scene of fallbackPlan.scenes) {
-        scenesWithFrames.push(await generateSceneFrames(scene, fallbackPlan, config, promptOverrides));
+        const withFrames = await generateSceneFrames(scene, fallbackPlan, config, promptOverrides, priorEndFrameUrl);
+        scenesWithFrames.push(withFrames);
+        if (isRealFrameUrl(withFrames.generatedEndFrameUrl ?? withFrames.endFrameUrl)) {
+          priorEndFrameUrl = withFrames.generatedEndFrameUrl ?? withFrames.endFrameUrl;
+        }
       }
 
       // Optional post-generation frame-pair vision check — best-effort, only on
@@ -995,7 +1048,7 @@ export async function POST(req: NextRequest) {
               });
             }
             if (parsed.action === 'plan' && parsed.plan) {
-              const normalized = normalizePlannerPlan(parsed.plan, fallbackPlan);
+              const normalized = normalizePlannerPlan(parsed.plan, fallbackPlan, planOptions.sceneCount);
               return planReviewResponse(normalized, {
                 model: plannerAgent.modelId,
                 intent: 'creative_plan',
@@ -1045,7 +1098,7 @@ export async function POST(req: NextRequest) {
           return scriptResponse(fallback, { model: config.model, aiPlanningNotes: result.content });
         }
 
-        const plan = buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides);
+        const plan = buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides, planOptions);
         return planReviewResponse(plan, {
           model: config.model,
           aiPlanningNotes: result.content,
@@ -1065,9 +1118,9 @@ export async function POST(req: NextRequest) {
         }
         if (presentScript && !existingScript) {
           const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, fallbackPlan, settings);
-          return scriptResponse(fallback, { model: 'fallback', error: qErr.kind, notice: qErr.message });
+          return scriptResponse(clampScriptToSceneCount(fallback, planOptions.sceneCount), { model: 'fallback', error: qErr.kind, notice: qErr.message });
         }
-        const plan = buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides);
+        const plan = buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides, planOptions);
         return planReviewResponse(plan, { model: 'fallback', error: qErr.kind, notice: qErr.message }, config, promptOverrides);
       }
     }
@@ -1083,10 +1136,10 @@ export async function POST(req: NextRequest) {
     }
     if (presentScript && !existingScript) {
       const fallback = buildFallbackVideoScriptFromPlan(concept || lastUser, fallbackPlan, settings);
-      return scriptResponse(fallback, { model: 'unconfigured', needsConfig: true });
+      return scriptResponse(clampScriptToSceneCount(fallback, planOptions.sceneCount), { model: 'unconfigured', needsConfig: true });
     }
 
-    const plan = buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides);
+    const plan = buildCreativeWorkflowPlanWithPrompts(concept || lastUser, refs, promptOverrides, planOptions);
     return planReviewResponse(plan, { model: 'unconfigured', needsConfig: true }, null, promptOverrides);
   } catch (error) {
     console.error('Chat API error:', error);

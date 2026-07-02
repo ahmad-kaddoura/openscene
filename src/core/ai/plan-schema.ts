@@ -240,14 +240,30 @@ function coerceAsset(asset: PlannerPlanAsset, index: number): ReusableAssetPlan 
   };
 }
 
+function filterAssetsByVideoMode(assets: ReusableAssetPlan[], videoMode: VideoPlanningMode): ReusableAssetPlan[] {
+  if (videoMode === 'influencer') {
+    return assets.filter((a) => a.type !== 'product' && !(a.type === 'environment' && a.id.includes('product')));
+  }
+  if (videoMode === 'product') {
+    return assets.filter((a) => a.type !== 'influencer');
+  }
+  return assets;
+}
+
 /** Convert a planner plan into the existing CreativeWorkflowPlan type. */
 export function normalizePlannerPlan(
   plan: PlannerPlan,
   fallback: CreativeWorkflowPlan,
+  preferredSceneCount?: number,
 ): CreativeWorkflowPlan {
-  const scenes = (plan.scenes ?? []).map((s, i) =>
+  let scenes = (plan.scenes ?? []).map((s, i) =>
     coerceScene(s, i, plan.suggestedDuration ?? fallback.suggestedDuration ?? 5),
   );
+
+  if (preferredSceneCount && scenes.length > preferredSceneCount) {
+    scenes = scenes.slice(0, preferredSceneCount);
+  }
+
   // Recompute timing.
   let t = 0;
   for (const sc of scenes) {
@@ -256,18 +272,23 @@ export function normalizePlannerPlan(
     t = sc.endTime;
   }
 
-  const reusableAssets = (plan.reusableAssets ?? []).map((a, i) => coerceAsset(a, i));
+  const videoMode = plan.videoMode ?? fallback.videoMode;
+  const rawAssets = (plan.reusableAssets ?? []).map((a, i) => coerceAsset(a, i));
+  const reusableAssets = filterAssetsByVideoMode(
+    rawAssets.length ? rawAssets : fallback.reusableAssets,
+    videoMode,
+  );
   const sceneIds = scenes.map((s) => s.id);
 
   const progress: PlanProgress = {
     completedSteps: [],
     pendingSteps: ['approve_plan', 'generate_assets', 'generate_frames', 'open_workflow'],
     missingInputs: [],
-    sceneFrameRequirements: scenes.map((s) => ({
+    sceneFrameRequirements: scenes.map((s, idx) => ({
       sceneId: s.id,
-      needsStartFrame: plan.scenes?.[scenes.indexOf(s)]?.needsStartFrame ?? true,
-      needsEndFrame: plan.scenes?.[scenes.indexOf(s)]?.needsEndFrame ?? true,
-      reason: plan.scenes?.[scenes.indexOf(s)]?.frameReason,
+      needsStartFrame: plan.scenes?.[idx]?.needsStartFrame ?? true,
+      needsEndFrame: plan.scenes?.[idx]?.needsEndFrame ?? true,
+      reason: plan.scenes?.[idx]?.frameReason,
     })),
     updatedAt: new Date().toISOString(),
   };
@@ -280,7 +301,10 @@ export function normalizePlannerPlan(
     targetViewer: plan.targetViewer || fallback.targetViewer,
     toneAndStyle: plan.toneAndStyle || fallback.toneAndStyle,
     storyStructure: plan.storyStructure ?? fallback.storyStructure,
-    reusableAssets: reusableAssets.length ? reusableAssets : fallback.reusableAssets,
+    reusableAssets: filterAssetsByVideoMode(
+      reusableAssets.length ? reusableAssets : filterAssetsByVideoMode(fallback.reusableAssets, videoMode),
+      videoMode,
+    ),
     consistencyReferences: fallback.consistencyReferences,
     scenes: scenes.length ? scenes : fallback.scenes,
     consistencyRequirements: plan.consistencyRequirements ?? fallback.consistencyRequirements,

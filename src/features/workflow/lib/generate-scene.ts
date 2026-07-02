@@ -24,20 +24,8 @@ function estimateGenerationMs(scene: Scene): number {
   return Math.max(90_000, scene.duration * 18_000);
 }
 
-function placeholderFrameUrl(title: string, order: number): string {
-  const hue = (order * 67) % 360;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="540" height="960" viewBox="0 0 540 960">
-    <defs>
-      <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" style="stop-color:hsl(${hue},55%,35%)"/>
-        <stop offset="100%" style="stop-color:hsl(${(hue + 40) % 360},45%,18%)"/>
-      </linearGradient>
-    </defs>
-    <rect width="540" height="960" fill="url(#g)"/>
-    <text x="270" y="460" text-anchor="middle" fill="white" font-family="system-ui,sans-serif" font-size="28" font-weight="600">${title.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</text>
-    <text x="270" y="510" text-anchor="middle" fill="rgba(255,255,255,0.6)" font-family="system-ui,sans-serif" font-size="16">Scene ${order + 1}</text>
-  </svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+function isRealFrameUrl(url?: string): boolean {
+  return Boolean(url && !url.startsWith('data:image/svg+xml'));
 }
 
 function reportProgress(
@@ -84,17 +72,34 @@ export async function generateSceneAssets(
     existingModel?: string;
     onTaskSubmitted?: (taskId: string, model: string) => void | Promise<void>;
     signal?: AbortSignal;
+    needsEndFrame?: boolean;
+    priorSceneEndFrameUrl?: string;
   },
 ): Promise<{ startFrameUrl: string; endFrameUrl: string; videoUrl: string; taskId: string; model: string }> {
   const startFrameUrl =
     scene.startFrameUrl ??
     scene.generatedStartFrameUrl ??
     scene.referenceImageUrls?.[0] ??
-    placeholderFrameUrl(scene.title, scene.order);
-  const endFrameUrl =
-    scene.endFrameUrl ??
-    scene.generatedEndFrameUrl ??
-    placeholderFrameUrl(`${scene.title} End`, scene.order);
+    options?.priorSceneEndFrameUrl;
+
+  if (!isRealFrameUrl(startFrameUrl)) {
+    throw new SceneGenerationError(
+      'Generate start frames before video. Each scene needs a real start frame image — placeholders cannot be used for Kling-style interpolation.',
+    );
+  }
+
+  const wantsEndFrame = options?.needsEndFrame !== false;
+  const endFrameUrl = scene.endFrameUrl ?? scene.generatedEndFrameUrl;
+
+  if (wantsEndFrame && !isRealFrameUrl(endFrameUrl)) {
+    throw new SceneGenerationError(
+      'Generate end frames before video. Kling-style generation interpolates between a real start frame and end frame — generate both first.',
+    );
+  }
+
+  const motionPrompt = wantsEndFrame && endFrameUrl
+    ? `${options?.prompt || scene.motionPrompt || scene.prompt}. Smooth natural motion interpolating from the start frame composition to the end frame composition.`
+    : options?.prompt || scene.motionPrompt || scene.prompt;
 
   const startedAt = Date.now();
   const estimatedTotalMs = estimateGenerationMs(scene);
@@ -108,9 +113,9 @@ export async function generateSceneAssets(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: options?.prompt || scene.motionPrompt || scene.prompt,
+        prompt: motionPrompt,
         startFrameUrl,
-        endFrameUrl,
+        endFrameUrl: wantsEndFrame ? endFrameUrl : undefined,
         generationModels: options?.generationModels,
         promptOverrides: options?.promptOverrides,
       }),
@@ -154,7 +159,7 @@ export async function generateSceneAssets(
       reportProgress(startedAt, estimatedTotalMs, 100, onProgress);
       return {
         startFrameUrl,
-        endFrameUrl,
+        endFrameUrl: endFrameUrl || startFrameUrl,
         videoUrl: status.videoUrl,
         taskId: status.taskId,
         model: status.model || model,

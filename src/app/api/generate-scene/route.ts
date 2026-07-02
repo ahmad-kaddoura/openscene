@@ -61,6 +61,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ taskId, model });
     }
 
+    if (!body.startFrameUrl) {
+      return NextResponse.json({ error: 'Video generation requires a start frame image.' }, { status: 400 });
+    }
+
     const { taskId, model } = await submitQwenVideoTask(config, {
       prompt: body.prompt,
       startFrameUrl: body.startFrameUrl,
