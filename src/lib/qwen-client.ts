@@ -57,12 +57,21 @@ export type QwenCallError =
   | { kind: 'auth'; message: string; status: number }
   | { kind: 'api'; message: string; status: number };
 
+/** A chat message part. String for text-only; array for multimodal (vision). */
+export type QwenMessageContent =
+  | string
+  | Array<
+      | { type: 'text'; text: string }
+      | { type: 'image_url'; image_url: { url: string } }
+    >;
+
 export async function callQwenChat(
   config: QwenConfig,
-  messages: { role: string; content: string }[],
-  options?: { jsonMode?: boolean; maxTokens?: number; temperature?: number }
+  messages: { role: string; content: QwenMessageContent }[],
+  options?: { jsonMode?: boolean; maxTokens?: number; temperature?: number; model?: string }
 ): Promise<{ content: string; usage?: { total_tokens?: number } }> {
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const model = options?.model || config.model;
 
   let response: Response;
   try {
@@ -73,7 +82,7 @@ export async function callQwenChat(
         Authorization: `Bearer ${config.apiKey}`,
       },
       body: JSON.stringify({
-        model: config.model,
+        model,
         messages,
         ...(options?.jsonMode ? { response_format: { type: 'json_object' } } : {}),
         temperature: options?.temperature ?? 0.7,

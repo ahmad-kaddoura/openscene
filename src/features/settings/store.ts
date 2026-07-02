@@ -212,7 +212,7 @@ export const useSettingsStore = create<SettingsState>()(
             agentConfigs: {
               ...current.settings.agentConfigs,
               ...p?.settings?.agentConfigs,
-            },
+            } as AppSettings['agentConfigs'],
             costControls: {
               ...current.settings.costControls,
               ...p?.settings?.costControls,

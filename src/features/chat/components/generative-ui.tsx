@@ -22,11 +22,13 @@ import type {
   DirectorReview,
   AspectRatio,
   CreativeWorkflowPlan,
+  ClarifyingQuestion,
   ReusableAssetPlan,
   ConsistencyReference,
   VideoScript,
 } from '@/core/types';
 import { buildVideoBriefPatch, pixelsFromResolutionLabel, resolutionLabelFromPixels } from '../lib/video-output-utils';
+import { coerceClarifyingQuestions } from '@/core/ai/plan-schema';
 
 const BRAND_KIT_STORAGE_KEY = 'openscene-brandkits';
 
@@ -59,6 +61,9 @@ export function renderGenerativeUI(
     case 'influencer_card': return <InfluencerCard key={key} asset={gui.data} onApprove={opts?.onPresetSelect} disabled={opts?.disabled} />;
     case 'background_card': return <BackgroundCard key={key} asset={gui.data} onApprove={opts?.onPresetSelect} disabled={opts?.disabled} />;
     case 'frames_card': return <FramesCard key={key} scenes={gui.data.scenes} onApprove={opts?.onPresetSelect} disabled={opts?.disabled} />;
+    case 'clarifying_questions': return <ClarifyingQuestionsCard key={key} questions={gui.data.questions} onSelect={opts?.onPresetSelect} disabled={opts?.disabled} />;
+    case 'consistency_review': return <ConsistencyReviewCard key={key} findings={gui.data.findings} />;
+    case 'node_actions': return <NodeActionsCard key={key} nodeId={gui.data.nodeId} nodeKind={gui.data.nodeKind} actions={gui.data.actions} onSelect={opts?.onPresetSelect} disabled={opts?.disabled} />;
     default: return null;
   }
 }
@@ -1446,5 +1451,206 @@ function ReviewItem({ label, value }: { label: string; value: string }) {
       <div className="text-[10px] font-medium text-muted-foreground mb-0.5">{label}</div>
       <div className="text-[11px] line-clamp-2">{value}</div>
     </div>
+  );
+}
+
+function ClarifyingQuestionsCard({
+  questions,
+  onSelect,
+  disabled,
+}: {
+  questions: ClarifyingQuestion[] | unknown;
+  onSelect?: (message: string) => void;
+  disabled?: boolean;
+}) {
+  const normalized = coerceClarifyingQuestions(questions);
+  if (!normalized.length) return null;
+  return (
+    <Card className="border-primary/20 bg-card/80">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <LucideIcons.HelpCircle className="h-4 w-4 text-primary" />
+          A few quick questions before I plan
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {normalized.map((q, i) => (
+          <ClarifyingQuestionRow key={q.id || `${q.text}-${i}`} question={q} onSelect={onSelect} disabled={disabled} />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ClarifyingQuestionRow({
+  question,
+  onSelect,
+  disabled,
+}: {
+  question: ClarifyingQuestion;
+  onSelect?: (message: string) => void;
+  disabled?: boolean;
+}) {
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customValue, setCustomValue] = useState('');
+
+  const send = (message: string) => {
+    if (disabled || !message.trim()) return;
+    onSelect?.(message.trim());
+  };
+
+  const options = question.options ?? [];
+
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+      <p className="text-sm font-medium text-foreground leading-snug">{question.text}</p>
+
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        {options.map((opt, idx) => (
+          <button
+            key={`${opt}-${idx}`}
+            type="button"
+            disabled={disabled}
+            onClick={() => send(opt)}
+            className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/50 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        {question.currentValue && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => send(question.currentValue!)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            title={question.currentLabel}
+          >
+            <LucideIcons.SlidersHorizontal className="h-3.5 w-3.5" />
+            Use set value: {question.currentValue}
+          </button>
+        )}
+
+        {!customOpen ? (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => setCustomOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-border bg-transparent px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <LucideIcons.PencilLine className="h-3.5 w-3.5" />
+            Custom answer
+          </button>
+        ) : (
+          <div className="flex w-full items-center gap-2">
+            <input
+              autoFocus
+              type="text"
+              value={customValue}
+              disabled={disabled}
+              onChange={(e) => setCustomValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') send(customValue);
+              }}
+              placeholder={question.placeholder || 'Type your answer…'}
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            />
+            <Button
+              type="button"
+              size="sm"
+              disabled={disabled || !customValue.trim()}
+              onClick={() => send(customValue)}
+              className="h-8 rounded-md px-3"
+            >
+              <LucideIcons.Send className="h-3.5 w-3.5" />
+              Send
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ConsistencyReviewCard({ findings }: { findings: string[] }) {
+  if (!findings.length) return null;
+  return (
+    <Card className="border-emerald-500/20 bg-card/80">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <LucideIcons.ShieldCheck className="h-4 w-4 text-emerald-500" />
+          Consistency check
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-1.5">
+          {findings.map((f, i) => (
+            <li key={i} className="text-xs text-muted-foreground flex items-start gap-1.5">
+              <span className="text-emerald-500 mt-0.5">•</span>
+              <span>{f}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+const NODE_ACTION_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  'Edit this prompt': LucideIcons.PencilLine,
+  'Regenerate this frame': LucideIcons.RefreshCw,
+  'Improve consistency': LucideIcons.ShieldCheck,
+  'Replace the asset': LucideIcons.Replace,
+  'Create a variation': LucideIcons.Copy,
+  'Generate video from this frame': LucideIcons.Video,
+  'Connect this node to another node': LucideIcons.Link2,
+  'Update scene details': LucideIcons.SlidersHorizontal,
+};
+
+function NodeActionsCard({
+  nodeKind,
+  actions,
+  onSelect,
+  disabled,
+}: {
+  nodeId: string;
+  nodeKind: string;
+  actions: { label: string; prompt: string }[];
+  onSelect?: (message: string) => void;
+  disabled?: boolean;
+}) {
+  if (!actions.length) return null;
+  return (
+    <Card className="border-primary/20 bg-card/80">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2 capitalize">
+          <LucideIcons.MousePointerClick className="h-4 w-4 text-primary" />
+          Editing {nodeKind} node
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-xs text-muted-foreground mb-2.5">What do you want to do with this node?</p>
+        <div className="flex flex-wrap gap-2">
+          {actions.map((action, i) => {
+            const Icon = NODE_ACTION_ICONS[action.label] ?? LucideIcons.Sparkles;
+            return (
+              <Button
+                key={`${action.label}-${i}`}
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                onClick={() => onSelect?.(action.prompt)}
+                className="gap-1.5 text-xs"
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {action.label}
+              </Button>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

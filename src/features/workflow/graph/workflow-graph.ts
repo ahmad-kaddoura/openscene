@@ -214,7 +214,9 @@ export function buildWorkflowGraph(
       id: asset.id,
       type: 'asset',
       position: savedPositions?.[asset.id] ?? defaults[asset.id] ?? { x: 80, y: 80 + idx * 190 },
-      data: { ...(asset as unknown as Record<string, unknown>), workflowStyle: workflowStyle(asset.id) },
+      // Slim payload: asset node reads full ReusableAssetPlan from the project
+      // store by id. Keep only what the canvas needs to render the card shell.
+      data: { assetId: asset.id, label: 'asset', workflowStyle: workflowStyle(asset.id) },
     });
   });
 
@@ -258,7 +260,10 @@ export function buildWorkflowGraph(
         id: scene.id,
         type: 'scene',
         position: pos(scene.id),
-        data: { ...(scene as unknown as Record<string, unknown>), workflowStyle: workflowStyle(scene.id) },
+        // Slim payload: node components read full Scene from the store by id.
+        // Spreading the full Scene here caused every progress tick to rebuild
+        // the graph and re-render every node.
+        data: { sceneId: scene.id, label: 'scene', workflowStyle: workflowStyle(scene.id) },
       });
     }
 

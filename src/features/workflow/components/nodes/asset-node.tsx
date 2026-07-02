@@ -14,10 +14,18 @@ import type { ReusableAssetPlan } from '@/core/types';
 const BRAND_KIT_STORAGE_KEY = 'openscene-brandkits';
 type WorkflowStyle = { border?: string; line?: string };
 
-function AssetNodeComponent({ data }: NodeProps) {
-  const asset = data as unknown as ReusableAssetPlan;
-  const workflowStyle = (data as unknown as { workflowStyle?: WorkflowStyle }).workflowStyle;
+function AssetNodeComponent({ data, id }: NodeProps) {
+  const dataRecord = data as unknown as { assetId?: string; workflowStyle?: WorkflowStyle };
+  const workflowStyle = dataRecord.workflowStyle;
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  // Asset nodes now receive a slim { assetId } payload; look up the full plan
+  // from the project store. Fall back to the legacy full-asset data shape so
+  // imported snapshots still render.
+  const assetFromStore = useProjectStore((s) => {
+    const project = s.getCurrentProject();
+    return project?.creativePlan?.reusableAssets.find((a) => a.id === (dataRecord.assetId ?? id));
+  });
+  const asset = (assetFromStore ?? (data as unknown as ReusableAssetPlan)) as ReusableAssetPlan;
 
   const saveToProjectAssets = async () => {
     if (!currentProjectId || !asset.generatedImageUrl) return;
@@ -108,7 +116,7 @@ function AssetNodeComponent({ data }: NodeProps) {
         <div className="p-3 space-y-2">
           {asset.generatedImageUrl ? (
             <div className="rounded-md border border-border/50 bg-background/30">
-              <img src={asset.generatedImageUrl} alt={asset.name} className="block w-full h-auto" />
+              <img src={asset.generatedImageUrl} alt={asset.name} className="block w-full h-auto" loading="lazy" />
             </div>
           ) : (
             <div className="flex min-h-[120px] items-center justify-center rounded-md border border-border/50 bg-muted/30 px-3 text-center text-[10px] text-muted-foreground">

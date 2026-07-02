@@ -19,6 +19,8 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Play,
+  Plus,
   Search,
   Send,
   Settings2,
@@ -47,10 +49,14 @@ import { useSettingsStore } from "@/features/settings/store";
 import { usePersistedState } from "@/shared/lib/use-persisted-state";
 import type {
   ChatAttachment,
+  AgentConfig,
+  AgentType,
   CreativeWorkflowPlan,
   GenerativeUIComponent,
+  GenerationModelRouting,
   Project,
   ProductionStep,
+  PromptOverrides,
   ReusableAssetPlan,
   Scene,
   VideoScript,
@@ -118,8 +124,142 @@ function firstGeneratedAsset(plan?: CreativeWorkflowPlan) {
   return plan?.reusableAssets.find((asset) => asset.generatedImageUrl);
 }
 
+// Shared planning-turn runner. Used by both AgentHome (new project) and the
+// empty review workspace (quick-start on an existing project) so a single
+// code path processes /api/chat responses.
+async function runPlanningTurn(args: {
+  project: Project;
+  content: string;
+  attachments: ChatAttachment[];
+  referenceImageUrls: string[];
+  generationModels: GenerationModelRouting | undefined;
+  promptOverrides: PromptOverrides | undefined;
+  agentConfigs: Record<AgentType, AgentConfig> | undefined;
+  addMessage: (projectId: string, role: "user" | "assistant", content: string, generativeUI?: GenerativeUIComponent[], metadata?: Record<string, unknown>, attachments?: ChatAttachment[]) => Promise<void>;
+  setStreaming: (streaming: boolean) => void;
+  updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
+  buildFromStoryboard: (scenes: Scene[]) => void;
+}) {
+  const { project, content, attachments, referenceImageUrls, generationModels, promptOverrides, agentConfigs, addMessage, setStreaming, updateProject, buildFromStoryboard } = args;
+  setStreaming(true);
+  await addMessage(project.id, "user", content, undefined, undefined, attachments);
+
+  const projectForRequest = {
+    ...project,
+    description: content,
+    referenceImageUrls,
+  };
+
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content }],
+        project: projectForRequest,
+        referenceImageUrls,
+        projectId: project.id,
+        generationModels,
+        promptOverrides,
+        agentConfigs,
+      }),
+    });
+    const data = await response.json();
+    const updates: Partial<Project> = {};
+
+    for (const gui of (data.generativeUI ?? []) as GenerativeUIComponent[]) {
+      if (gui.type === "creative_workflow_plan") {
+        const plan = gui.data;
+        updates.creativePlan = plan;
+        updates.storyboard = {
+          id: `sb-${Date.now()}`,
+          scenes: plan.scenes,
+          totalDuration: plan.scenes[plan.scenes.length - 1]?.endTime || 0,
+          narrativeArc: plan.storyStructure.join(" -> "),
+          notes: plan.summary,
+        };
+      }
+      if (gui.type === "script_card") {
+        const script = gui.data as VideoScript;
+        updates.videoScript = script;
+        updates.productionStep = "script";
+        updates.creativePlan =
+          updates.creativePlan ??
+          buildCreativeWorkflowPlanWithPrompts(content, referenceImageUrls);
+      }
+      if (gui.type === "influencer_card" || gui.type === "background_card") {
+        const asset = gui.data as ReusableAssetPlan;
+        const plan = updates.creativePlan ?? projectForRequest.creativePlan;
+        if (plan) {
+          updates.creativePlan = {
+            ...plan,
+            approvalStatus: "approved",
+            reusableAssets: plan.reusableAssets.map((item) => (item.id === asset.id ? asset : item)),
+          };
+        }
+        updates.productionStep = gui.type === "influencer_card" ? "influencer" : "background";
+      }
+      if (gui.type === "frames_card") {
+        const scenes = gui.data.scenes;
+        const plan = updates.creativePlan ?? projectForRequest.creativePlan;
+        if (plan) {
+          updates.creativePlan = { ...plan, scenes, approvalStatus: "assets_generated" };
+        }
+        updates.storyboard = {
+          id: `sb-${Date.now()}`,
+          scenes,
+          totalDuration: scenes[scenes.length - 1]?.endTime || 0,
+          narrativeArc: plan?.storyStructure.join(" -> ") ?? "AI-generated from references",
+          notes: plan?.summary,
+        };
+        updates.productionStep = "frames";
+      }
+    }
+
+    await updateProject(project.id, updates);
+    if (data.metadata?.attachmentAnalyses) {
+      await updateProject(project.id, { attachmentAnalyses: data.metadata.attachmentAnalyses });
+    }
+    await addMessage(project.id, "assistant", data.content, data.generativeUI, {
+      step: data.step,
+      totalSteps: data.totalSteps,
+      phase: data.phase,
+      model: data.metadata?.model,
+      productionStep: data.metadata?.productionStep,
+    });
+
+    if (data.phase === "workflow" && updates.storyboard?.scenes) {
+      buildFromStoryboard(updates.storyboard.scenes);
+      await updateProject(project.id, { currentPhase: "workflow", status: "in_progress" });
+    }
+  } catch {
+    await addMessage(
+      project.id,
+      "assistant",
+      "I saved your prompt and references, but the planning request failed. Send it again from the agent panel to continue.",
+    );
+  } finally {
+    setStreaming(false);
+  }
+}
+
 function sceneFrameUrl(scene?: Scene) {
   return scene?.startFrameUrl ?? scene?.generatedStartFrameUrl ?? scene?.referenceImageUrls?.[0];
+}
+
+function projectScenes(project: Project) {
+  return project.storyboard?.scenes ?? project.creativePlan?.scenes ?? [];
+}
+
+function workspaceStage(project: Project): "empty" | "planning" | "ready" {
+  const scenes = projectScenes(project);
+  const hasFrames = scenes.some((scene) => sceneFrameUrl(scene));
+  const hasAssets = Boolean(project.creativePlan?.reusableAssets.some((asset) => asset.generatedImageUrl));
+  const hasScript = Boolean(project.videoScript);
+
+  if (!hasFrames && !hasAssets && !hasScript && scenes.length === 0) return "empty";
+  if (!hasFrames && !hasAssets) return "planning";
+  return "ready";
 }
 
 function formatProjectTime(date: string) {
@@ -157,6 +297,7 @@ function AgentHome() {
   const { buildFromStoryboard } = useWorkflowStore();
   const generationModels = useSettingsStore((s) => s.settings.generationModels);
   const promptOverrides = useSettingsStore((s) => s.settings.promptOverrides);
+  const agentConfigs = useSettingsStore((s) => s.settings.agentConfigs);
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [issues, setIssues] = useState<AttachmentIssue[]>([]);
@@ -203,106 +344,29 @@ function AgentHome() {
     if (!content || isStarting) return;
 
     setIsStarting(true);
-    setStreaming(true);
     const project = await createProject(content.slice(0, 46), content);
-    if (attachments.length) {
-      await updateProject(project.id, { referenceImageUrls: attachments.map((item) => item.url) });
+    const refUrls = attachments.map((item) => item.url);
+    if (refUrls.length) {
+      await updateProject(project.id, { referenceImageUrls: refUrls });
     }
-    await addMessage(project.id, "user", content, undefined, undefined, attachments);
 
     try {
-      const projectForRequest = {
-        ...project,
-        description: content,
-        referenceImageUrls: attachments.map((item) => item.url),
-      };
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [{ role: "user", content }],
-          project: projectForRequest,
-          referenceImageUrls: attachments.map((item) => item.url),
-          projectId: project.id,
-          generationModels,
-          promptOverrides,
-        }),
+      await runPlanningTurn({
+        project,
+        content,
+        attachments,
+        referenceImageUrls: refUrls,
+        generationModels,
+        promptOverrides,
+        agentConfigs,
+        addMessage,
+        setStreaming,
+        updateProject,
+        buildFromStoryboard,
       });
-      const data = await response.json();
-      const updates: Partial<Project> = {};
-
-      for (const gui of (data.generativeUI ?? []) as GenerativeUIComponent[]) {
-        if (gui.type === "creative_workflow_plan") {
-          const plan = gui.data;
-          updates.creativePlan = plan;
-          updates.storyboard = {
-            id: `sb-${Date.now()}`,
-            scenes: plan.scenes,
-            totalDuration: plan.scenes[plan.scenes.length - 1]?.endTime || 0,
-            narrativeArc: plan.storyStructure.join(" -> "),
-            notes: plan.summary,
-          };
-        }
-        if (gui.type === "script_card") {
-          const script = gui.data as VideoScript;
-          updates.videoScript = script;
-          updates.productionStep = "script";
-          updates.creativePlan =
-            updates.creativePlan ??
-            buildCreativeWorkflowPlanWithPrompts(content, attachments.map((item) => item.url));
-        }
-        if (gui.type === "influencer_card" || gui.type === "background_card") {
-          const asset = gui.data as ReusableAssetPlan;
-          const plan = updates.creativePlan ?? projectForRequest.creativePlan;
-          if (plan) {
-            updates.creativePlan = {
-              ...plan,
-              approvalStatus: "approved",
-              reusableAssets: plan.reusableAssets.map((item) => (item.id === asset.id ? asset : item)),
-            };
-          }
-          updates.productionStep = gui.type === "influencer_card" ? "influencer" : "background";
-        }
-        if (gui.type === "frames_card") {
-          const scenes = gui.data.scenes;
-          const plan = updates.creativePlan ?? projectForRequest.creativePlan;
-          if (plan) {
-            updates.creativePlan = { ...plan, scenes, approvalStatus: "assets_generated" };
-          }
-          updates.storyboard = {
-            id: `sb-${Date.now()}`,
-            scenes,
-            totalDuration: scenes[scenes.length - 1]?.endTime || 0,
-            narrativeArc: plan?.storyStructure.join(" -> ") ?? "AI-generated from references",
-            notes: plan?.summary,
-          };
-          updates.productionStep = "frames";
-        }
-      }
-
-      await updateProject(project.id, updates);
-      await addMessage(project.id, "assistant", data.content, data.generativeUI, {
-        step: data.step,
-        totalSteps: data.totalSteps,
-        phase: data.phase,
-        model: data.metadata?.model,
-        productionStep: data.metadata?.productionStep,
-      });
-
-      if (data.phase === "workflow" && updates.storyboard?.scenes) {
-        buildFromStoryboard(updates.storyboard.scenes);
-        await updateProject(project.id, { currentPhase: "workflow", status: "in_progress" });
-      }
-    } catch {
-      await addMessage(
-        project.id,
-        "assistant",
-        "I created the workspace, but the first generation request failed. Your prompt and references are saved; send again from the agent panel.",
-      );
     } finally {
       setPrompt("");
       setAttachments([]);
-      setStreaming(false);
       setIsStarting(false);
     }
   };
@@ -562,14 +626,28 @@ function ArtifactPreview({
   spacious?: boolean;
   compact?: boolean;
 }) {
-  const heroScene = project.storyboard?.scenes.find((scene) => sceneFrameUrl(scene)) ?? project.storyboard?.scenes[0];
+  const stage = workspaceStage(project);
+  const maxWidth = spacious ? "max-w-7xl" : compact ? "max-w-5xl" : "max-w-6xl";
+
+  if (stage === "empty") {
+    return (
+      <ScrollArea className="h-full">
+        <div className={`@container mx-auto flex min-h-full flex-col px-5 py-5 md:px-7 ${maxWidth}`}>
+          <EarlyArtifactWorkspace project={project} />
+        </div>
+      </ScrollArea>
+    );
+  }
+
+  const heroScene = projectScenes(project).find((scene) => sceneFrameUrl(scene)) ?? projectScenes(project)[0];
   const heroAsset = firstGeneratedAsset(project.creativePlan);
   const script = project.videoScript;
   const plan = project.creativePlan;
+  const scenes = projectScenes(project);
 
   return (
     <ScrollArea className="h-full">
-      <div className={`@container mx-auto px-5 py-5 md:px-7 ${spacious ? "max-w-7xl" : compact ? "max-w-5xl" : "max-w-6xl"}`}>
+      <div className={`@container mx-auto px-5 py-5 md:px-7 ${maxWidth}`}>
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <Badge variant="outline" className="mb-2 border-primary/20 bg-primary/10 text-primary">
@@ -592,10 +670,7 @@ function ArtifactPreview({
               ) : heroAsset?.generatedImageUrl ? (
                 <img src={heroAsset.generatedImageUrl} alt={heroAsset.name} className="h-full w-full object-cover" />
               ) : (
-                <div className="flex h-full flex-col items-center justify-center text-neutral-300">
-                  <ImagePlus className="mb-3 h-10 w-10 text-cyan-300" />
-                  <p className="text-sm">Storyboard frames will appear after approval.</p>
-                </div>
+                <PlanningPreviewPlaceholder project={project} stage={stage} />
               )}
               <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-5 text-white">
                 <p className="text-xs uppercase tracking-[0.18em] text-cyan-200">Current preview</p>
@@ -624,16 +699,17 @@ function ArtifactPreview({
         <section className="mt-5 rounded-[8px] border border-border bg-card p-4 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-semibold text-foreground">Scene continuity</h3>
-            <Badge variant="outline">{project.storyboard?.scenes.length ?? 0} scenes</Badge>
+            <Badge variant="outline">{scenes.length} scenes</Badge>
           </div>
-          <div className="grid gap-3 @sm:grid-cols-2 @xl:grid-cols-3">
-            {(project.storyboard?.scenes ?? plan?.scenes ?? []).map((scene) => (
-              <SceneArtifact key={scene.id} scene={scene} />
-            ))}
-            {!(project.storyboard?.scenes ?? plan?.scenes ?? []).length && (
-              <EmptyArtifact />
-            )}
-          </div>
+          {scenes.length > 0 ? (
+            <div className="grid gap-3 @sm:grid-cols-2 @xl:grid-cols-3">
+              {scenes.map((scene) => (
+                <SceneArtifact key={scene.id} scene={scene} />
+              ))}
+            </div>
+          ) : (
+            <EmptyArtifact compact />
+          )}
         </section>
 
         {script && (
@@ -663,6 +739,17 @@ function ArtifactPreview({
 function WorkspaceInspector({ project, progress }: { project: Project; progress: number }) {
   const refs = project.referenceImageUrls ?? [];
   const activeIndex = currentStepIndex(project);
+  const plan = project.creativePlan;
+  const analyses = project.attachmentAnalyses ?? [];
+  const planProgress = plan?.progress;
+  const completedSteps = planProgress?.completedSteps ?? [];
+  const pendingSteps = planProgress?.pendingSteps ?? [];
+  const missingInputs = planProgress?.missingInputs ?? [];
+  const generatedAssets = plan?.reusableAssets.filter((a) => a.generationStatus === 'generated') ?? [];
+  const pendingAssets = plan?.reusableAssets.filter((a) => a.generationStatus !== 'generated') ?? [];
+  const failedAssets = plan?.reusableAssets.filter((a) => a.generationStatus === 'failed') ?? [];
+  const generatedFrames = plan?.scenes.filter((s) => s.frameGenerationStatus === 'generated') ?? [];
+  const pendingFrames = plan?.scenes.filter((s) => s.frameGenerationStatus !== 'generated') ?? [];
 
   return (
     <ScrollArea className="h-full">
@@ -692,6 +779,155 @@ function WorkspaceInspector({ project, progress }: { project: Project; progress:
           </div>
         </section>
 
+        {plan && (
+          <section className="rounded-[8px] border border-border bg-card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-semibold text-foreground">Plan</h3>
+              <Badge variant={plan.approvalStatus === 'approved' || plan.approvalStatus === 'assets_generated' ? 'default' : 'secondary'}>
+                {plan.approvalStatus ?? 'draft'}
+              </Badge>
+            </div>
+            <div className="space-y-3 text-sm">
+              <ContextLine label="Concept" value={plan.concept} />
+              <ContextLine label="Target viewer" value={plan.targetViewer} />
+              <ContextLine label="Tone & style" value={plan.toneAndStyle} />
+              <ContextLine label="Suggested aspect ratio" value={plan.suggestedAspectRatio} />
+              <ContextLine label="Suggested duration" value={plan.suggestedDuration ? `${plan.suggestedDuration}s` : undefined} />
+              <ContextLine label="Scenes" value={`${plan.scenes.length}`} />
+            </div>
+            {missingInputs.length > 0 && (
+              <div className="mt-3 rounded-[8px] border border-amber-300/60 bg-amber-50 p-3">
+                <p className="text-xs font-semibold text-amber-800">Missing inputs</p>
+                <ul className="mt-1 space-y-1">
+                  {missingInputs.map((m, i) => (
+                    <li key={i} className="text-xs text-amber-800">• {m}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {(completedSteps.length > 0 || pendingSteps.length > 0) && (
+              <div className="mt-3 space-y-1.5">
+                {completedSteps.map((s) => (
+                  <div key={`done-${s}`} className="flex items-center gap-2 text-xs text-emerald-600">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    <span className="capitalize">{s.replace(/_/g, ' ')}</span>
+                  </div>
+                ))}
+                {pendingSteps.map((s) => (
+                  <div key={`pending-${s}`} className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Clock3 className="h-3.5 w-3.5" />
+                    <span className="capitalize">{s.replace(/_/g, ' ')}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {plan && plan.reusableAssets.length > 0 && (
+          <section className="rounded-[8px] border border-border bg-card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-semibold text-foreground">Required assets</h3>
+              <Badge variant="outline">{generatedAssets.length}/{plan.reusableAssets.length} ready</Badge>
+            </div>
+            <div className="space-y-2">
+              {plan.reusableAssets.map((asset) => (
+                <div key={asset.id} className="flex items-center gap-3 rounded-[8px] border border-border bg-muted/30 p-2.5">
+                  <div className="h-10 w-10 shrink-0 overflow-hidden rounded-[6px] border border-border bg-muted">
+                    {asset.generatedImageUrl ? (
+                      <img src={asset.generatedImageUrl} alt={asset.name} className="h-full w-full object-cover" loading="lazy" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+                        <ImagePlus className="h-4 w-4" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-foreground">{asset.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">{asset.description || asset.consistencyNotes || 'Reusable asset'}</p>
+                  </div>
+                  <Badge
+                    variant={asset.generationStatus === 'generated' ? 'default' : asset.generationStatus === 'failed' ? 'destructive' : 'secondary'}
+                    className="capitalize"
+                  >
+                    {asset.generationStatus}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+            {failedAssets.length > 0 && (
+              <p className="mt-2 text-xs text-red-500">{failedAssets.length} asset{failedAssets.length === 1 ? '' : 's'} failed to generate. Retry from chat.</p>
+            )}
+            {pendingAssets.length > 0 && pendingAssets.some((a) => a.criticality === 'critical') && (
+              <p className="mt-2 text-xs text-amber-600">Critical assets still pending — generate them before frames.</p>
+            )}
+          </section>
+        )}
+
+        {plan && plan.scenes.length > 0 && (
+          <section className="rounded-[8px] border border-border bg-card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-semibold text-foreground">Scenes & frames</h3>
+              <Badge variant="outline">{generatedFrames.length}/{plan.scenes.length} framed</Badge>
+            </div>
+            <div className="space-y-2">
+              {plan.scenes.map((scene) => {
+                const req = planProgress?.sceneFrameRequirements.find((r) => r.sceneId === scene.id);
+                return (
+                  <div key={scene.id} className="rounded-[8px] border border-border bg-muted/30 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-medium text-foreground">{scene.title}</p>
+                      <Badge variant={scene.frameGenerationStatus === 'generated' ? 'default' : 'secondary'} className="capitalize">
+                        {scene.frameGenerationStatus ?? 'pending'}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{scene.sceneGoal || scene.prompt}</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
+                      <span>{scene.duration}s</span>
+                      <span>·</span>
+                      <span className="capitalize">{scene.cameraMovement.replace(/_/g, ' ')}</span>
+                      {req && (
+                        <>
+                          <span>·</span>
+                          <span>{req.needsStartFrame ? 'start' : 'no start'}{req.needsEndFrame ? ' + end' : ''}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {pendingFrames.length > 0 && generatedAssets.length > 0 && (
+              <p className="mt-2 text-xs text-muted-foreground">{pendingFrames.length} scene{pendingFrames.length === 1 ? '' : 's'} still need frames.</p>
+            )}
+          </section>
+        )}
+
+        {analyses.length > 0 && (
+          <section className="rounded-[8px] border border-border bg-card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-semibold text-foreground">Attachment analyses</h3>
+              <Badge variant="outline">{analyses.length}</Badge>
+            </div>
+            <div className="space-y-2">
+              {analyses.map((a) => (
+                <div key={a.hash} className="flex gap-3 rounded-[8px] border border-border bg-muted/30 p-2.5">
+                  <div className="h-10 w-10 shrink-0 overflow-hidden rounded-[6px] border border-border bg-muted">
+                    <img src={a.url} alt={a.category} className="h-full w-full object-cover" loading="lazy" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold capitalize text-foreground">{a.category}</p>
+                    <p className="line-clamp-2 text-xs text-muted-foreground">{a.description || a.inferredPurpose || 'Analyzed attachment'}</p>
+                    {a.needsClarification && a.clarificationQuestion && (
+                      <p className="mt-1 text-[10px] text-amber-600">⚠ {a.clarificationQuestion}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className="rounded-[8px] border border-border bg-card p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-semibold text-foreground">References</h3>
@@ -701,7 +937,7 @@ function WorkspaceInspector({ project, progress }: { project: Project; progress:
             <div className="grid grid-cols-3 gap-2">
               {refs.slice(0, 6).map((url, index) => (
                 <div key={`${url}-${index}`} className="overflow-hidden rounded-[8px] border border-border">
-                  <img src={url} alt={`Reference ${index + 1}`} className="aspect-square w-full object-cover" />
+                  <img src={url} alt={`Reference ${index + 1}`} className="aspect-square w-full object-cover" loading="lazy" />
                 </div>
               ))}
             </div>
@@ -908,12 +1144,279 @@ function SceneArtifact({ scene }: { scene: Scene }) {
   );
 }
 
-function EmptyArtifact() {
+const PIPELINE_STEPS = [
+  { id: "concept", label: "Concept", icon: Clapperboard, description: "Goal, audience, and references" },
+  { id: "script", label: "Script", icon: Mic2, description: "Narration and scene beats" },
+  { id: "assets", label: "Assets", icon: User2, description: "Character, product, and style lockups" },
+  { id: "storyboard", label: "Storyboard", icon: Layers3, description: "Continuity-aware start/end frames" },
+  { id: "workflow", label: "Workflow", icon: Film, description: "Editable production graph" },
+] as const;
+
+function EarlyArtifactWorkspace({ project }: { project: Project }) {
+  const refs = project.referenceImageUrls ?? [];
+  const activeStep = currentStepIndex(project);
+  const { updateProject } = useProjectStore();
+  const setPhase = useProjectStore((s) => s.setPhase);
+  const { addMessage, setStreaming, isStreaming } = useChatStore();
+  const { buildFromStoryboard } = useWorkflowStore();
+  const generationModels = useSettingsStore((s) => s.settings.generationModels);
+  const promptOverrides = useSettingsStore((s) => s.settings.promptOverrides);
+  const agentConfigs = useSettingsStore((s) => s.settings.agentConfigs);
+  const [isStarting, setIsStarting] = useState(false);
+
+  const quickStart = async (promptText: string) => {
+    if (isStarting || isStreaming) return;
+    setIsStarting(true);
+    setPhase("chat");
+    try {
+      await runPlanningTurn({
+        project,
+        content: promptText,
+        attachments: [],
+        referenceImageUrls: refs,
+        generationModels,
+        promptOverrides,
+        agentConfigs,
+        addMessage,
+        setStreaming,
+        updateProject,
+        buildFromStoryboard,
+      });
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
+  const busy = isStarting || isStreaming;
+
   return (
-    <div className="col-span-full rounded-[8px] border border-dashed border-border bg-muted/40 p-8 text-center">
-      <Wand2 className="mx-auto mb-3 h-8 w-8 text-primary" />
-      <h3 className="font-semibold text-foreground">No storyboard yet</h3>
-      <p className="mt-1 text-sm text-muted-foreground">Use the agent panel to generate a script, reusable assets, and continuity-aware scenes.</p>
+    <div className="relative flex flex-1 flex-col gap-6 py-2">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <Badge variant="outline" className="mb-2 border-primary/20 bg-primary/10 text-primary">
+            <Sparkles className="h-3.5 w-3.5" />
+            Review workspace
+          </Badge>
+          <h2 className="text-xl font-semibold text-foreground md:text-2xl">{project.name}</h2>
+          <p className="mt-1 max-w-xl text-sm leading-6 text-muted-foreground">
+            {project.description || "Describe your video in the agent panel. Artifacts will appear here as the plan takes shape."}
+          </p>
+        </div>
+        <NextAction project={project} />
+      </div>
+
+      {/* Cinematic hero: stylized filmstrip preview + guided copy */}
+      <section className="relative overflow-hidden rounded-2xl border border-border bg-neutral-950 shadow-[0_18px_60px_rgba(15,23,42,0.25)]">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_25%_15%,rgba(45,212,191,0.22),transparent_45%),radial-gradient(circle_at_85%_10%,rgba(56,189,248,0.16),transparent_40%)]" />
+        <div className="relative grid gap-0 @2xl:grid-cols-[1.05fr_0.95fr]">
+          <div className="flex flex-col justify-center p-6 text-white md:p-8">
+            <div className="mb-4 inline-flex w-fit items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-xs font-medium text-cyan-200">
+              <Sparkles className="h-3.5 w-3.5" />
+              Ready to plan
+            </div>
+            <h3 className="text-xl font-semibold leading-tight md:text-2xl">Your storyboard will land here</h3>
+            <p className="mt-2 max-w-md text-sm leading-6 text-white/70">
+              Describe the video on the left, attach references, and approve a plan. Scene frames, avatar lockups, and continuity notes fill this board automatically.
+            </p>
+
+            {refs.length > 0 ? (
+              <div className="mt-5">
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-white/55">Attached references</p>
+                <div className="flex flex-wrap gap-2">
+                  {refs.slice(0, 5).map((url, index) => (
+                    <div key={`${url.slice(0, 24)}-${index}`} className="h-14 w-14 overflow-hidden rounded-lg border border-white/15 bg-white/5 shadow-sm">
+                      <img src={url} alt={`Reference ${index + 1}`} className="h-full w-full object-cover" loading="lazy" />
+                    </div>
+                  ))}
+                  {refs.length > 5 && (
+                    <div className="flex h-14 w-14 items-center justify-center rounded-lg border border-dashed border-white/20 bg-white/5 text-xs text-white/60">
+                      +{refs.length - 5}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/55">
+                <Paperclip className="h-3.5 w-3.5" />
+                No references yet — attach product, character, or style images in the agent panel.
+              </div>
+            )}
+          </div>
+
+          {/* Faux filmstrip — communicates the end-state visually */}
+          <div className="relative min-h-[240px] border-t border-white/10 p-5 @2xl:min-h-0 @2xl:border-l @2xl:border-t-0">
+            <div className="absolute right-5 top-5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.18em] text-white/45">
+              <Film className="h-3.5 w-3.5" />
+              Storyboard preview
+            </div>
+            <div className="flex h-full flex-col justify-center gap-3">
+              <div className="grid grid-cols-3 gap-2.5">
+                {[0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className="group relative aspect-video overflow-hidden rounded-lg border border-white/10 bg-gradient-to-br from-white/10 to-white/5"
+                  >
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(45,212,191,0.18),transparent_60%)]" />
+                    <div className="absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-md bg-black/40 text-[10px] font-semibold text-white/70">
+                      {i + 1}
+                    </div>
+                    <div className="absolute inset-0 flex items-center justify-center opacity-70">
+                      <div className="flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-white/5">
+                        <Play className="h-3 w-3 text-white/60" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-3 gap-2.5">
+                {[3, 4, 5].map((i) => (
+                  <div
+                    key={i}
+                    className="relative aspect-video overflow-hidden rounded-lg border border-white/10 bg-gradient-to-br from-white/[0.07] to-white/[0.03]"
+                  >
+                    <div className="absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-md bg-black/40 text-[10px] font-semibold text-white/55">
+                      {i + 1}
+                    </div>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <ImagePlus className="h-4 w-4 text-white/35" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] text-white/55">
+                <span className="flex items-center gap-1.5"><Clapperboard className="h-3.5 w-3.5" /> 6 scenes · ~30s</span>
+                <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5" /> Shared continuity</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Quick-start — actually sends a planning turn for this project */}
+      <section className="rounded-2xl border border-border bg-card p-4 shadow-sm md:p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div>
+            <h3 className="font-semibold text-foreground">Start with a prompt</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">Send one of these to the agent — your plan will populate here.</p>
+          </div>
+          <Badge variant="outline" className="gap-1">
+            <Sparkles className="h-3 w-3" />
+            Quick start
+          </Badge>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {SHORTCUT_PROMPTS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => quickStart(item)}
+              disabled={busy}
+              className="group flex items-center gap-2 rounded-full border border-border bg-muted/40 px-3.5 py-2 text-left text-xs font-medium text-foreground shadow-sm transition hover:border-primary/40 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Plus className="h-3.5 w-3.5 text-muted-foreground transition group-hover:text-primary" />
+              <span className="max-w-[280px] truncate">{item}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Compact horizontal pipeline with connecting line */}
+      <section className="rounded-2xl border border-border bg-card p-4 shadow-sm md:p-5">
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <div>
+            <h3 className="font-semibold text-foreground">Production pipeline</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">Each step unlocks the next review gate.</p>
+          </div>
+          <Badge variant="outline">{Math.round((activeStep / (PIPELINE_STEPS.length - 1)) * 100)}% started</Badge>
+        </div>
+        <div className="relative">
+          <div className="absolute left-0 right-0 top-4 h-px bg-border" aria-hidden />
+          <div
+            className="absolute left-0 top-4 h-px bg-primary/60 transition-all"
+            style={{ width: `${(activeStep / (PIPELINE_STEPS.length - 1)) * 100}%` }}
+            aria-hidden
+          />
+          <div className="relative grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+            {PIPELINE_STEPS.map((step, index) => {
+              const done = index < activeStep;
+              const current = index === activeStep;
+              const Icon = step.icon;
+              return (
+                <div key={step.id} className="flex flex-col gap-2 pt-1">
+                  <div className="flex items-center gap-2.5">
+                    <div
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 bg-card transition-colors ${
+                        done || current ? "border-primary text-primary" : "border-border text-muted-foreground"
+                      }`}
+                    >
+                      {done ? <CheckCircle2 className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                    </div>
+                    {current && <span className="hidden text-xs font-medium text-primary xl:inline">In focus</span>}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{step.label}</p>
+                    <p className="mt-0.5 text-[11px] leading-5 text-muted-foreground">{step.description}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* What lands here — compact explainer */}
+      <section className="grid gap-3 sm:grid-cols-3">
+        <ExplainerCard icon={ImagePlus} title="Previews" copy="Hero frame and asset previews as they're generated." />
+        <ExplainerCard icon={Layers3} title="Lockups" copy="Concept, avatar, voice, and global style in one review." />
+        <ExplainerCard icon={Film} title="Scenes" copy="Continuity-aware scene cards with start/end frames." />
+      </section>
+    </div>
+  );
+}
+
+function ExplainerCard({ icon: Icon, title, copy }: { icon: typeof Film; title: string; copy: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/30 p-3.5">
+      <div className="mb-2 flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <Icon className="h-4 w-4" />
+      </div>
+      <p className="text-sm font-medium text-foreground">{title}</p>
+      <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{copy}</p>
+    </div>
+  );
+}
+
+function PlanningPreviewPlaceholder({
+  project,
+  stage,
+}: {
+  project: Project;
+  stage: "planning" | "ready";
+}) {
+  const plan = project.creativePlan;
+  return (
+    <div className="flex h-full flex-col items-center justify-center bg-[radial-gradient(circle_at_center,rgba(45,212,191,0.14),transparent_58%)] px-6 text-center">
+      <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
+        <ImagePlus className="h-5 w-5" />
+      </div>
+      <p className="text-sm font-medium text-neutral-200">
+        {stage === "planning" ? "Plan approved — generation is next" : "Preview will appear after generation"}
+      </p>
+      <p className="mt-1 max-w-xs text-xs leading-5 text-neutral-400">
+        {plan?.summary ?? project.description ?? "Storyboard frames and asset previews land here once generation starts."}
+      </p>
+    </div>
+  );
+}
+
+function EmptyArtifact({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={`rounded-xl border border-dashed border-border bg-muted/20 text-center ${compact ? "px-4 py-6" : "col-span-full p-8"}`}>
+      <Wand2 className={`mx-auto text-primary ${compact ? "mb-2 h-5 w-5" : "mb-3 h-8 w-8"}`} />
+      <h3 className={`font-semibold text-foreground ${compact ? "text-sm" : ""}`}>No storyboard yet</h3>
+      <p className={`mt-1 text-muted-foreground ${compact ? "mx-auto max-w-sm text-xs leading-5" : "text-sm"}`}>
+        Use the agent panel to generate a script, reusable assets, and continuity-aware scenes.
+      </p>
     </div>
   );
 }

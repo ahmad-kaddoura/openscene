@@ -21,6 +21,8 @@ export interface Project {
   versions: ProjectVersion[];
   /** Reference images attached during chat brainstorming */
   referenceImageUrls?: string[];
+  /** Cached vision analyses for attached images, keyed by image hash. */
+  attachmentAnalyses?: AttachmentAnalysis[];
 }
 
 export type ProjectStatus = 'draft' | 'in_progress' | 'review' | 'completed' | 'archived';
@@ -332,6 +334,8 @@ export interface CreativeWorkflowPlan {
   suggestedDuration?: number;
   outputFormat?: OutputFormat;
   approvalStatus?: 'draft' | 'approved' | 'assets_generated' | 'workflow_ready';
+  /** Live progress block rendered in the Details tab. */
+  progress?: PlanProgress;
 }
 
 // ============= Chat =============
@@ -350,6 +354,28 @@ export interface ChatMessage {
   attachments?: ChatAttachment[];
   generativeUI?: GenerativeUIComponent[];
   metadata?: Record<string, unknown>;
+}
+
+// A single clarifying question the planner asks the user before producing a
+// plan. `options` are 3 short suggested answers the user can click; the custom
+// answer lets them type their own. `parameterKey` marks questions that map to a
+// settable project parameter — the UI then offers a "use the set value" button.
+export type ClarifyingParameterKey =
+  | 'sceneCount'
+  | 'duration'
+  | 'aspectRatio'
+  | 'videoMode'
+  | 'startEndFrames';
+
+export interface ClarifyingQuestion {
+  id?: string;
+  text: string;
+  kind?: string;
+  options: string[];
+  placeholder?: string;
+  parameterKey?: ClarifyingParameterKey;
+  currentValue?: string;
+  currentLabel?: string;
 }
 
 export type GenerativeUIComponent =
@@ -372,7 +398,10 @@ export type GenerativeUIComponent =
   | { type: 'script_card'; data: VideoScript }
   | { type: 'influencer_card'; data: ReusableAssetPlan }
   | { type: 'background_card'; data: ReusableAssetPlan }
-  | { type: 'frames_card'; data: { scenes: Scene[] } };
+  | { type: 'frames_card'; data: { scenes: Scene[] } }
+  | { type: 'clarifying_questions'; data: { questions: ClarifyingQuestion[]; planId?: string } }
+  | { type: 'consistency_review'; data: { findings: string[]; rewrittenPrompt?: string; sceneId?: string } }
+  | { type: 'node_actions'; data: { nodeId: string; nodeKind: string; actions: { label: string; prompt: string }[] } };
 
 // ============= AI Director =============
 export interface DirectorReview {
@@ -403,6 +432,10 @@ export interface AgentConfig {
 
 export type AgentType =
   | 'chat_planner'
+  | 'planner'
+  | 'vision_analyst'
+  | 'consistency_checker'
+  | 'node_assistant'
   | 'prompt_enhancer'
   | 'storyboard_writer'
   | 'scene_generator'
@@ -414,6 +447,56 @@ export type AgentType =
   | 'ai_director'
   | 'video_assembler'
   | 'hook_generator';
+
+/** Lightweight per-scene frame requirement flags surfaced by the planner. */
+export interface SceneFrameRequirement {
+  sceneId: string;
+  needsStartFrame: boolean;
+  needsEndFrame: boolean;
+  reason?: string;
+}
+
+/** Plan-level progress block rendered in the Details tab. */
+export interface PlanProgress {
+  completedSteps: string[];
+  pendingSteps: string[];
+  missingInputs: string[];
+  sceneFrameRequirements: SceneFrameRequirement[];
+  updatedAt?: string;
+}
+
+/** Vision analysis result for an attached image, cached on the project. */
+export interface AttachmentAnalysis {
+  url: string;
+  hash: string;
+  category: 'product' | 'influencer' | 'brand_asset' | 'style_reference' | 'environment' | 'other';
+  description: string;
+  inferredPurpose: string;
+  needsClarification?: boolean;
+  clarificationQuestion?: string;
+  analyzedAt: string;
+}
+
+/** A scoped operation emitted by the node assistant agent. */
+export type NodeAssistantOperation =
+  | { type: 'update_prompt'; field: 'prompt' | 'startFramePrompt' | 'endFramePrompt' | 'motionPrompt' | 'negativePrompt'; value: string }
+  | { type: 'update_scene_field'; field: keyof import('./index').Scene; value: unknown }
+  | { type: 'regenerate_frame'; frame: 'start' | 'end' | 'both' }
+  | { type: 'replace_asset'; assetId: string; newPrompt: string }
+  | { type: 'create_variation' }
+  | { type: 'generate_video' }
+  | { type: 'connect_node'; targetNodeId: string; sourceHandle: string; targetHandle: string }
+  | { type: 'update_scene_details'; updates: Partial<Scene> };
+
+/** Identifies which workflow node the chat is currently scoped to. */
+export interface NodeContext {
+  nodeId: string;
+  nodeKind: 'scene' | 'parameters' | 'script' | 'frames' | 'asset' | 'note' | 'imageInput' | 'videoInput' | 'promptInput' | 'motionControl' | 'motionOutput' | 'output';
+  sceneId?: string;
+  motionId?: string;
+  inputId?: string;
+  assetId?: string;
+}
 
 export type EdgeLabelPlacement = 'on-edge' | 'in-node';
 export type CanvasGridVariant = 'dots' | 'lines' | 'cross';

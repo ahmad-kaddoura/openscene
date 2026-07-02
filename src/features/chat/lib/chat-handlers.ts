@@ -365,35 +365,37 @@ export function buildBriefFromProject(
 export function buildStoryboardScenes(
   brief: Partial<VideoBrief>,
   concept: string,
-  referenceImageUrls: string[] = []
+  referenceImageUrls: string[] = [],
+  promptOverrides?: PromptOverrides,
 ): Partial<Scene>[] {
   const count = brief.numberOfScenes || 4;
   const sceneDur = brief.sceneDuration || Math.floor((brief.duration || 30) / count);
   const style = brief.style || 'cinematic';
   const topic = concept || brief.description || 'the product';
+  const aspectRatio = brief.aspectRatio || '9:16';
 
   const templates = [
     {
       title: 'Hook — Grab Attention',
-      prompt: `Dramatic opening shot for ${topic}, ${style} style, high contrast lighting, immediate visual hook, ${brief.aspectRatio} framing`,
+      prompt: resolvePrompt('storyboard.scene.hook', { topic, style, aspectRatio }, promptOverrides),
       mood: 'Bold, attention-grabbing',
       cameraMovement: 'slow_push_in' as const,
     },
     {
       title: 'Problem / Context',
-      prompt: `Relatable scene establishing the challenge around ${topic}, ${style} aesthetic, natural lighting, authentic feel`,
+      prompt: resolvePrompt('storyboard.scene.problem', { topic, style }, promptOverrides),
       mood: 'Relatable, empathetic',
       cameraMovement: 'handheld' as const,
     },
     {
       title: 'Solution / Showcase',
-      prompt: `Hero showcase of ${topic}, premium ${style} product shot, dynamic angles, crisp detail, professional commercial quality`,
+      prompt: resolvePrompt('storyboard.scene.solution', { topic, style }, promptOverrides),
       mood: 'Confident, impressive',
       cameraMovement: 'orbit' as const,
     },
     {
       title: 'Call to Action',
-      prompt: `Closing scene for ${topic}, warm inviting ${style} finish, clear CTA moment, aspirational but achievable`,
+      prompt: resolvePrompt('storyboard.scene.cta', { topic, style }, promptOverrides),
       mood: 'Empowering, conclusive',
       cameraMovement: 'dolly_in' as const,
     },
@@ -496,7 +498,7 @@ function inferAssetNeeds(concept: string, mode: VideoPlanningMode, referenceImag
       consistencyNotes: 'Keep surface material, prop family, lighting direction, color palette, background, and premium product scale consistent across related scenes.',
       styleNotes: 'Commercial product set design with controlled reflections, disciplined negative space, and brand-aligned props.',
       referenceImagePrompt: resolvePrompt('asset.environment.reference', { concept }, promptOverrides),
-      negativePrompt: 'people, hands, faces, random logos, cluttered set, inconsistent lighting, distorted product scale',
+      negativePrompt: resolvePrompt('negative.environment', {}, promptOverrides),
       usageNotes: 'Reuse for product-only scenes unless the user asks for a new location.',
       saveTargets: ['brand_identity', 'project_assets'],
       criticality: 'critical',
@@ -514,7 +516,7 @@ function inferAssetNeeds(concept: string, mode: VideoPlanningMode, referenceImag
       consistencyNotes: 'Keep room geometry, vanity or set dressing, lighting direction, color palette, and camera height consistent when scenes are visually related.',
       styleNotes: 'Natural creator space with clean production polish and enough depth for scene variation.',
       referenceImagePrompt: resolvePrompt('asset.background.reference', { concept }, promptOverrides),
-      negativePrompt: 'extra people, inconsistent room layout, random logos, messy clutter, unreadable text',
+      negativePrompt: resolvePrompt('negative.influencer.background', {}, promptOverrides),
       usageNotes: 'Reuse for related scenes. Ask before switching to a new location.',
       saveTargets: ['brand_identity', 'project_assets'],
       criticality: 'supporting',

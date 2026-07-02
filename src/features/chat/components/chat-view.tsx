@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useProjectStore } from '@/features/project/store';
 import { useChatStore, buildCreativeWorkflowPlanWithPrompts } from '@/features/chat';
 import { useWorkflowStore } from '@/features/workflow';
@@ -10,11 +10,11 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { SpinnerIcon } from '@/components/ui/spinner-icon';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Send, Boxes, Workflow, Wand2, Eye, SlidersHorizontal, Paperclip, X, ArrowRightLeft } from 'lucide-react';
+import { Send, Boxes, Workflow, Wand2, Eye, SlidersHorizontal, Paperclip, X, ArrowRightLeft, MousePointerClick } from 'lucide-react';
 import { renderGenerativeUI } from './generative-ui';
 import { VideoConfigPanel } from './video-config-panel';
 import ReactMarkdown from 'react-markdown';
-import type { ChatAttachment, CreativeWorkflowPlan, GenerativeUIComponent, ReusableAssetPlan, Scene, VideoBrief, VideoScript } from '@/core/types';
+import type { AttachmentAnalysis, ChatAttachment, CreativeWorkflowPlan, GenerativeUIComponent, NodeAssistantOperation, ReusableAssetPlan, Scene, VideoBrief, VideoScript } from '@/core/types';
 
 const STARTER_PROMPTS = [
   'Product ad for my skincare line — premium, no people',
@@ -68,9 +68,12 @@ function GenerativeUIRenderer({
 export function ChatView() {
   const { currentProjectId, getCurrentProject, updateCurrentProject, setPhase } = useProjectStore();
   const { messages, isStreaming, addMessage, setStreaming } = useChatStore();
-  const { buildFromStoryboard, clearGraph } = useWorkflowStore();
+  const { buildFromStoryboard, clearGraph, updateScene, addWorkflowConnection } = useWorkflowStore();
   const generationModels = useSettingsStore((s) => s.settings.generationModels);
   const promptOverrides = useSettingsStore((s) => s.settings.promptOverrides);
+  const agentConfigs = useSettingsStore((s) => s.settings.agentConfigs);
+  const selectedNodeContext = useWorkflowStore((s) => s.selectedNodeContext);
+  const clearSelectedNode = useWorkflowStore((s) => s.clearSelectedNodeContext);
   const [input, setInput] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentErrors, setAttachmentErrors] = useState<string[]>([]);
@@ -116,7 +119,7 @@ export function ChatView() {
 
     const outgoingMessages = [...messages, { role: 'user' as const, content }];
 
-    await addMessage(currentProjectId, 'user', content, undefined, undefined, attachments);
+    await addMessage(currentProjectId, 'user', content, undefined, selectedNodeContext ? { nodeId: selectedNodeContext.nodeId, nodeKind: selectedNodeContext.nodeKind } : undefined, attachments);
 
     const mergedRefs = [
       ...(currentProject?.referenceImageUrls || []),
@@ -140,6 +143,8 @@ export function ChatView() {
           projectId: currentProjectId,
           generationModels,
           promptOverrides,
+          agentConfigs,
+          nodeContext: selectedNodeContext,
         }),
       });
 
@@ -259,7 +264,71 @@ export function ChatView() {
         needsConfig: data.metadata?.needsConfig,
         intent: data.metadata?.intent,
         productionStep: data.metadata?.productionStep,
+        nodeId: data.metadata?.nodeId,
+        nodeKind: data.metadata?.nodeKind,
       });
+
+      // Apply node-assistant operations to the workflow store + project plan.
+      if (data.metadata?.operations && selectedNodeContext) {
+        const ops = data.metadata.operations as NodeAssistantOperation[];
+        for (const op of ops) {
+          if ((op.type === 'update_prompt' || op.type === 'update_scene_field' || op.type === 'update_scene_details') && selectedNodeContext.sceneId) {
+            if (op.type === 'update_scene_details') {
+              updateScene(selectedNodeContext.sceneId, op.updates as Partial<Scene>);
+            } else if (op.type === 'update_prompt') {
+              updateScene(selectedNodeContext.sceneId, { [op.field]: op.value } as Partial<Scene>);
+            } else {
+              updateScene(selectedNodeContext.sceneId, { [op.field]: op.value } as Partial<Scene>);
+            }
+          }
+          if (op.type === 'replace_asset') {
+            const projectNow = getCurrentProject();
+            const planNow = projectNow?.creativePlan;
+            if (planNow) {
+              await updateCurrentProject({
+                creativePlan: {
+                  ...planNow,
+                  reusableAssets: planNow.reusableAssets.map((a) =>
+                    a.id === op.assetId ? { ...a, referenceImagePrompt: op.newPrompt, generationStatus: 'pending', generatedImageUrl: undefined } : a,
+                  ),
+                },
+              });
+            }
+          }
+          if (op.type === 'connect_node') {
+            addWorkflowConnection({
+              source: selectedNodeContext.nodeId,
+              sourceHandle: op.sourceHandle,
+              target: op.targetNodeId,
+              targetHandle: op.targetHandle,
+            });
+          }
+        }
+      }
+
+      // Persist attachment analyses returned by the planner so vision never re-runs.
+      if (data.metadata?.attachmentAnalyses) {
+        const projectNow = getCurrentProject();
+        await updateCurrentProject({
+          attachmentAnalyses: data.metadata.attachmentAnalyses as AttachmentAnalysis[],
+        });
+      }
+
+      // Persist an updated plan returned by the node assistant.
+      if (data.metadata?.updatedPlan) {
+        const projectNow = getCurrentProject();
+        const currentPlan = projectNow?.creativePlan;
+        if (currentPlan && data.metadata.updatedPlan) {
+          await updateCurrentProject({ creativePlan: data.metadata.updatedPlan as CreativeWorkflowPlan });
+        }
+      }
+
+      // Persist any connections the node assistant wants to add.
+      if (Array.isArray(data.metadata?.connectionsToAdd)) {
+        for (const conn of data.metadata.connectionsToAdd as { source: string; sourceHandle: string; target: string; targetHandle: string }[]) {
+          addWorkflowConnection(conn);
+        }
+      }
 
       if (shouldOpenWorkflow) {
         if (data.skipToWorkflow) {
@@ -292,10 +361,14 @@ export function ChatView() {
     updateCurrentProject,
     buildFromStoryboard,
     clearGraph,
+    updateScene,
+    addWorkflowConnection,
     currentProject,
     getCurrentProject,
     generationModels,
     promptOverrides,
+    agentConfigs,
+    selectedNodeContext,
   ]);
 
   const handlePresetSelect = useCallback(
@@ -349,7 +422,21 @@ export function ChatView() {
     }
   };
 
-  const inputPlaceholder = workflowReady
+  const visibleMessages = useMemo(() => {
+    if (!selectedNodeContext) return messages;
+    const nodeId = selectedNodeContext.nodeId;
+    // Show messages tagged with this node id, plus the most recent user/assistant
+    // pair that was sent while this node was selected (they have no nodeId tag
+    // yet but are part of this node's thread).
+    return messages.filter((m) => {
+      const tagged = m.metadata?.nodeId as string | undefined;
+      return tagged === nodeId;
+    });
+  }, [messages, selectedNodeContext]);
+
+  const inputPlaceholder = selectedNodeContext
+    ? `Ask about this ${selectedNodeContext.nodeKind} node — edit prompt, regenerate frame, replace asset, create variation…`
+    : workflowReady
     ? 'Refine the workflow — ask for scene, asset, prompt, or motion changes…'
     : framesReady
       ? 'Review the frames, regenerate any scene, or approve to open Workflow…'
@@ -371,7 +458,7 @@ export function ChatView() {
     <div className="flex flex-col h-full min-h-0">
       <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollRef}>
         <div className="max-w-3xl mx-auto space-y-4">
-          {messages.length === 0 && (
+          {visibleMessages.length === 0 && !selectedNodeContext && (
             <div className="text-center py-14 px-4">
               <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/20 flex items-center justify-center mx-auto mb-4">
                 <Wand2 className="w-6 h-6 text-primary" />
@@ -408,7 +495,19 @@ export function ChatView() {
             </div>
           )}
 
-          {messages.map((msg) => (
+          {visibleMessages.length === 0 && selectedNodeContext && (
+            <div className="text-center py-10 px-4">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/20 flex items-center justify-center mx-auto mb-3">
+                <MousePointerClick className="w-5 h-5 text-primary" />
+              </div>
+              <h2 className="text-base font-semibold mb-1.5 capitalize">Editing {selectedNodeContext.nodeKind} node</h2>
+              <p className="text-sm text-muted-foreground max-w-md mx-auto leading-relaxed">
+                Tell me what to do with this node — edit the prompt, regenerate the frame, replace the asset, create a variation, generate video, or connect it to another node.
+              </p>
+            </div>
+          )}
+
+          {visibleMessages.map((msg) => (
             <div
               key={msg.id}
               className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -531,6 +630,30 @@ export function ChatView() {
                 />
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {selectedNodeContext && (
+        <div className="px-4 pb-2 shrink-0">
+          <div className="max-w-3xl mx-auto flex items-center justify-between gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <MousePointerClick className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span className="font-medium text-foreground">Editing:</span>
+              <span className="capitalize text-muted-foreground truncate">
+                {selectedNodeContext.nodeKind} node
+                {selectedNodeContext.sceneId ? ` · scene` : ''}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={clearSelectedNode}
+              className="text-muted-foreground hover:text-foreground shrink-0"
+              aria-label="Exit node editing"
+              title="Back to project chat"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
       )}

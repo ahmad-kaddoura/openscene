@@ -100,7 +100,7 @@ function VideoInputNodeComponent({ id, data }: NodeProps) {
           <div className="relative flex min-h-[124px] cursor-pointer items-center justify-center overflow-hidden rounded-md border border-dashed border-border bg-muted/20" onClick={() => !videoUrl && inputRef.current?.click()}>
             {videoUrl ? (
               <>
-                <video src={videoUrl} className="block w-full" muted loop controls />
+                <video src={videoUrl} className="block w-full" muted loop controls preload="metadata" />
                 <ClearButton onClick={() => setVideoUrl(undefined)} />
               </>
             ) : (
@@ -215,7 +215,7 @@ function MotionControlNodeComponent({ id, data }: NodeProps) {
             </div>
           )}
           {motion.outputUrl && (
-            <video src={motion.outputUrl} controls className="w-full rounded-md border border-border" poster={motion.imageUrl} />
+            <video src={motion.outputUrl} controls preload="metadata" className="w-full rounded-md border border-border" poster={motion.imageUrl} />
           )}
           {busy ? (
             <Button size="sm" variant="outline" className="h-8 w-full gap-1.5 border-red-500/40 text-red-500 hover:bg-red-500/10 hover:text-red-500" onClick={() => cancelMotionControl(motion.id)}>
@@ -261,7 +261,7 @@ function MotionOutputNodeComponent({ id, data }: NodeProps) {
         <Header icon={<Video className="h-3 w-3" />} label="Motion Output" color="text-emerald-400" />
         <div className="space-y-2 p-3">
           {motion.outputUrl ? (
-            <video src={motion.outputUrl} controls className="w-full rounded-md border border-border" poster={motion.imageUrl} />
+            <video src={motion.outputUrl} controls preload="metadata" className="w-full rounded-md border border-border" poster={motion.imageUrl} />
           ) : (
             <div className="flex min-h-[130px] items-center justify-center rounded-md border border-dashed border-border bg-muted/20">
               <Empty icon={busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Video className="h-5 w-5" />} text={busy ? `Generating ${motion.progress ?? 0}%` : 'No output yet'} />

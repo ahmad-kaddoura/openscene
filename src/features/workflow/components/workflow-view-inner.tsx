@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useEffect, useState, useRef } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import {
   ReactFlow,
   Background,
@@ -44,6 +45,7 @@ import { MotionControlNode } from './nodes/motion-control-node';
 import { MotionOutputNode } from './nodes/motion-output-node';
 import { buildWorkflowGraph } from '../graph/workflow-graph';
 import { ADD_NODE_OPTIONS, type WorkflowNodeKind } from '../graph/workflow-node-catalog';
+import { resolveNodeContext } from '../graph/workflow-node-utils';
 import { useWorkflowNodeContextMenu } from './menus/node-context-menu';
 import { useWorkflowPaneMenu } from './menus/pane-menu';
 import { useSettingsStore } from '@/features/settings/store';
@@ -265,32 +267,75 @@ function normalizeWorkflowSnapshotForImport(snapshot: Record<string, unknown>) {
 }
 
 export function WorkflowViewInner() {
-  const sceneMap = useWorkflowStore((s) => s.sceneMap);
-  const sceneOrder = useWorkflowStore((s) => s.sceneOrder);
-  const nodePositions = useWorkflowStore((s) => s.nodePositions);
-  const nodeColorStyles = useWorkflowStore((s) => s.nodeColorStyles);
-  const hiddenNodeIds = useWorkflowStore((s) => s.hiddenNodeIds);
-  const shownOutputSceneIds = useWorkflowStore((s) => s.shownOutputSceneIds);
-  const noteNodes = useWorkflowStore((s) => s.noteNodes);
-  const motionControls = useWorkflowStore((s) => s.motionControls);
-  const inputNodes = useWorkflowStore((s) => s.inputNodes);
-  const workflowConnections = useWorkflowStore((s) => s.workflowConnections);
-  const updateScene = useWorkflowStore((s) => s.updateScene);
-  const generateAllScenes = useWorkflowStore((s) => s.generateAllScenes);
-  const isGeneratingAll = useWorkflowStore((s) => s.isGeneratingAll);
-  const getTotalDuration = useWorkflowStore((s) => s.getTotalDuration);
-  const setNodePosition = useWorkflowStore((s) => s.setNodePosition);
-  const addNodeAt = useWorkflowStore((s) => s.addNodeAt);
-  const addWorkflowConnection = useWorkflowStore((s) => s.addWorkflowConnection);
-  const importWorkflowSnapshot = useWorkflowStore((s) => s.importWorkflowSnapshot);
-  const applyAutoLayout = useWorkflowStore((s) => s.applyAutoLayout);
-  const loadLayoutForProject = useWorkflowStore((s) => s.loadLayoutForProject);
+  const {
+    sceneMap,
+    sceneOrder,
+    nodePositions,
+    nodeColorStyles,
+    hiddenNodeIds,
+    shownOutputSceneIds,
+    noteNodes,
+    motionControls,
+    inputNodes,
+    workflowConnections,
+  } = useWorkflowStore(
+    useShallow((s) => ({
+      sceneMap: s.sceneMap,
+      sceneOrder: s.sceneOrder,
+      nodePositions: s.nodePositions,
+      nodeColorStyles: s.nodeColorStyles,
+      hiddenNodeIds: s.hiddenNodeIds,
+      shownOutputSceneIds: s.shownOutputSceneIds,
+      noteNodes: s.noteNodes,
+      motionControls: s.motionControls,
+      inputNodes: s.inputNodes,
+      workflowConnections: s.workflowConnections,
+    })),
+  );
+  const {
+    updateScene,
+    generateAllScenes,
+    isGeneratingAll,
+    getTotalDuration,
+    setNodePosition,
+    addNodeAt,
+    addWorkflowConnection,
+    importWorkflowSnapshot,
+    applyAutoLayout,
+    loadLayoutForProject,
+    setSelectedNodeContext,
+    clearSelectedNodeContext,
+  } = useWorkflowStore(
+    useShallow((s) => ({
+      updateScene: s.updateScene,
+      generateAllScenes: s.generateAllScenes,
+      isGeneratingAll: s.isGeneratingAll,
+      getTotalDuration: s.getTotalDuration,
+      setNodePosition: s.setNodePosition,
+      addNodeAt: s.addNodeAt,
+      addWorkflowConnection: s.addWorkflowConnection,
+      importWorkflowSnapshot: s.importWorkflowSnapshot,
+      applyAutoLayout: s.applyAutoLayout,
+      loadLayoutForProject: s.loadLayoutForProject,
+      setSelectedNodeContext: s.setSelectedNodeContext,
+      clearSelectedNodeContext: s.clearSelectedNodeContext,
+    })),
+  );
   const edgeLabelPlacement = useSettingsStore((s) => s.settings.edgeLabelPlacement ?? 'in-node');
   const canvasGrid = useSettingsStore((s) => s.settings.canvasGrid);
   const theme = useSettingsStore((s) => s.settings.theme);
   const { currentProjectId, getCurrentProject } = useProjectStore();
   const currentProject = getCurrentProject();
   const [, setSelectedNode] = useState<string | null>(null);
+  const handleNodeClick = useCallback((_: unknown, node: FlowNode) => {
+    setSelectedNode(node.id);
+    const ctx = resolveNodeContext(node.id, node.type, sceneOrder);
+    setSelectedNodeContext(ctx);
+  }, [sceneOrder, setSelectedNodeContext]);
+  const handlePaneClick = useCallback(() => {
+    setSelectedNode(null);
+    clearSelectedNodeContext();
+  }, [clearSelectedNodeContext]);
   const [isImportDragging, setIsImportDragging] = useState(false);
   const [outputViewSceneId, setOutputViewSceneId] = useState<string | null>(null);
   const rfRef = useRef<ReactFlowInstance | null>(null);
@@ -320,6 +365,12 @@ export function WorkflowViewInner() {
     () => sceneOrder.map((id) => sceneMap[id]).filter(Boolean),
     [sceneMap, sceneOrder],
   );
+  // Keep a ref to the latest scenes so the graph builder can read it without
+  // the graph memo depending on the full scenes array (which would rebuild the
+  // graph on every progress tick). The graph rebuild is gated by graphKey,
+  // which captures only the fields that actually affect the graph.
+  const scenesRef = useRef(scenes);
+  scenesRef.current = scenes;
 
   useEffect(() => {
     if (currentProjectId) loadLayoutForProject(currentProjectId);
@@ -339,7 +390,7 @@ export function WorkflowViewInner() {
 
   const { nodes: graphNodes, edges: graphEdges } = useMemo(
     () => buildWorkflowGraph(
-      scenes,
+      scenesRef.current,
       nodePositions,
       edgeLabelPlacement,
       hiddenNodeIds,
@@ -350,7 +401,8 @@ export function WorkflowViewInner() {
       inputNodes,
       workflowConnections,
     ),
-    [graphKey, nodePositions, scenes, edgeLabelPlacement, hiddenNodeIds, currentProject?.creativePlan?.reusableAssets, nodeColorStyles, noteNodes, motionControls, inputNodes, workflowConnections],
+    // Intentionally exclude `scenes` from deps — graphKey gates the rebuild.
+    [graphKey, nodePositions, edgeLabelPlacement, hiddenNodeIds, currentProject?.creativePlan?.reusableAssets, nodeColorStyles, noteNodes, motionControls, inputNodes, workflowConnections],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(graphNodes);
@@ -670,8 +722,8 @@ export function WorkflowViewInner() {
           onPaneContextMenu={handlePaneContextMenu}
           nodeTypes={nodeTypes}
           onInit={(inst) => { rfRef.current = inst; }}
-          onNodeClick={(_, node) => setSelectedNode(node.id)}
-          onPaneClick={() => setSelectedNode(null)}
+          onNodeClick={handleNodeClick}
+          onPaneClick={handlePaneClick}
           fitView
           fitViewOptions={{ padding: 0.3 }}
           minZoom={0.1}

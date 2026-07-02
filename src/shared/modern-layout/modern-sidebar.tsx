@@ -1,6 +1,6 @@
 'use client';
 
-import { Clapperboard, Home, Palette, LayoutGrid, Folder, Settings, Gauge } from 'lucide-react';
+import { Clapperboard, Home, Palette, LayoutGrid, Settings, Gauge } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface ModernSidebarProps {
@@ -14,7 +14,7 @@ export function ModernSidebar({ activeTab, onTabChange }: ModernSidebarProps) {
     { id: 'avatar', icon: Gauge, label: 'Usage' },
     { id: 'brand', icon: Palette, label: 'Brand' },
     { id: 'apps', icon: LayoutGrid, label: 'Assets' },
-    { id: 'projects', icon: Folder, label: 'Projects' },
+    // { id: 'projects', icon: Folder, label: 'Projects' },
     { id: 'settings', icon: Settings, label: 'Settings' },
   ];
 

@@ -65,7 +65,33 @@ function SceneNodeComponent({ data, id }: NodeProps) {
     if (updater) updater(id, updates);
   }, [id]);
 
-  const handleAIAction = (action: string) => {
+  const handleAIAction = async (action: string) => {
+    const agentConfigs = useSettingsStore.getState().settings.agentConfigs;
+    const generationModels = useSettingsStore.getState().settings.generationModels;
+    try {
+      const response = await fetch('/api/enhance-prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: scene.prompt,
+          action: action as 'cinematic' | 'realistic' | 'viral' | 'camera' | 'general',
+          sceneTitle: scene.title,
+          sceneGoal: scene.sceneGoal,
+          agentConfigs,
+          generationModels,
+          promptOverrides,
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json() as { enhanced?: string };
+        if (data.enhanced) {
+          handleUpdate({ prompt: data.enhanced });
+          return;
+        }
+      }
+    } catch {
+      // fall through to static suffix below
+    }
     const suffix =
       action === 'cinematic' ? getPrompt('prompt.enhance.cinematic', promptOverrides) :
       action === 'realistic' ? getPrompt('prompt.enhance.realistic', promptOverrides) :
@@ -111,7 +137,7 @@ function SceneNodeComponent({ data, id }: NodeProps) {
         <div className="bg-muted/30 relative">
           {refPreview ? (
             <>
-              <img src={refPreview} alt="Reference" className="block w-full h-auto opacity-80" />
+              <img src={refPreview} alt="Reference" className="block w-full h-auto opacity-80" loading="lazy" />
               <div className="absolute bottom-1 left-1.5 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded">Ref</div>
             </>
           ) : (

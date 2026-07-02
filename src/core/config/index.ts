@@ -146,6 +146,46 @@ export const GENERATION_MODEL_PRESETS = {
 export const DEFAULT_GENERATION_MODELS = GENERATION_MODEL_PRESETS.high;
 
 export const DEFAULT_AGENT_CONFIGS = {
+  planner: {
+    id: 'planner' as const,
+    name: 'Planner',
+    description: 'Structured planner that produces the production plan or focused clarifying questions.',
+    modelId: 'qwen-max',
+    temperature: 0.5,
+    maxTokens: 4096,
+    systemPrompt: getDefaultPrompt('agent.planner.system'),
+    enabled: true,
+  },
+  vision_analyst: {
+    id: 'vision_analyst' as const,
+    name: 'Vision Analyst',
+    description: 'Classifies attached images and infers their purpose for the plan.',
+    modelId: 'qwen-vl-max',
+    temperature: 0.3,
+    maxTokens: 1024,
+    systemPrompt: getDefaultPrompt('agent.vision_analyst.system'),
+    enabled: true,
+  },
+  consistency_checker: {
+    id: 'consistency_checker' as const,
+    name: 'Consistency Checker',
+    description: 'Reviews prompts against consistency references before generation and rewrites them to enforce identity/product/brand continuity.',
+    modelId: 'qwen-max',
+    temperature: 0.3,
+    maxTokens: 4096,
+    systemPrompt: getDefaultPrompt('agent.consistency_checker.system'),
+    enabled: true,
+  },
+  node_assistant: {
+    id: 'node_assistant' as const,
+    name: 'Node Assistant',
+    description: 'Scoped assistant for a single selected workflow node. Emits operations that the client applies to that node only.',
+    modelId: 'qwen-max',
+    temperature: 0.5,
+    maxTokens: 3072,
+    systemPrompt: getDefaultPrompt('agent.node_assistant.system'),
+    enabled: true,
+  },
   chat_planner: {
     id: 'chat_planner' as const,
     name: 'Chat Planner',

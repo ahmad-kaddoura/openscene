@@ -246,10 +246,11 @@ function SceneOutputNode({
                 playsInline
                 loop
                 autoPlay
+                preload="metadata"
                 poster={scene.startFrameUrl ?? scene.generatedStartFrameUrl}
               />
             ) : (
-              <img src={previewUrl} alt={scene.title} className="block w-full h-auto bg-muted/30" />
+              <img src={previewUrl} alt={scene.title} className="block w-full h-auto bg-muted/30" loading="lazy" />
             )
           ) : isFailed ? (
             <div className="flex min-h-[120px] flex-col items-center justify-center gap-1.5 text-red-400 bg-red-500/5 p-3">

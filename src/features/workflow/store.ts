@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { nanoid } from 'nanoid';
 import { applyNodeChanges, applyEdgeChanges, type OnNodesChange, type OnEdgesChange, type Connection, addEdge } from '@xyflow/react';
-import type { Scene, SceneStatus } from '@/core/types';
+import type { Scene, SceneStatus, ChatAttachment, NodeContext } from '@/core/types';
 import { useProjectStore } from '@/features/project/store';
 import { CAMERA_MOVEMENTS, STYLE_PRESETS } from '@/core/config';
 
@@ -126,10 +126,13 @@ function clearMotionAbortController(id: string, controller?: AbortController) {
   motionAbortControllers.delete(id);
 }
 
+// Debounce layout persistence so dragging a node doesn't write to
+// localStorage on every mousemove. The beforeunload hook below flushes any
+// pending write when the tab unloads.
+let persistLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+
 function persistLayout(get: () => WorkflowState) {
-  const projectId = get().layoutProjectId;
-  if (!projectId) return;
-  saveLayoutToStorage(projectId, {
+  const snapshot = {
     positions: get().nodePositions,
     hiddenNodes: Object.keys(get().hiddenNodeIds),
     shownOutputs: Object.keys(get().shownOutputSceneIds),
@@ -138,7 +141,31 @@ function persistLayout(get: () => WorkflowState) {
     motionControls: get().motionControls,
     inputs: get().inputNodes,
     connections: get().workflowConnections,
-  });
+  };
+  const projectId = get().layoutProjectId;
+  if (!projectId) return;
+  pendingLayoutSnapshot = { projectId, snapshot };
+  if (persistLayoutTimer) clearTimeout(persistLayoutTimer);
+  persistLayoutTimer = setTimeout(() => {
+    if (pendingLayoutSnapshot) {
+      saveLayoutToStorage(pendingLayoutSnapshot.projectId, pendingLayoutSnapshot.snapshot);
+      pendingLayoutSnapshot = null;
+    }
+    persistLayoutTimer = null;
+  }, 250);
+}
+
+let pendingLayoutSnapshot: { projectId: string; snapshot: Parameters<typeof saveLayoutToStorage>[1] } | null = null;
+
+function flushPersistLayout() {
+  if (persistLayoutTimer) {
+    clearTimeout(persistLayoutTimer);
+    persistLayoutTimer = null;
+  }
+  if (pendingLayoutSnapshot) {
+    saveLayoutToStorage(pendingLayoutSnapshot.projectId, pendingLayoutSnapshot.snapshot);
+    pendingLayoutSnapshot = null;
+  }
 }
 
 let persistStoryboardTimer: ReturnType<typeof setTimeout> | null = null;
@@ -278,6 +305,11 @@ interface WorkflowState {
   workflowConnections: WorkflowConnection[];
   layoutProjectId: string | null;
 
+  // Selected node context for node-scoped chat
+  selectedNodeContext: NodeContext | null;
+  setSelectedNodeContext: (context: NodeContext | null) => void;
+  clearSelectedNodeContext: () => void;
+
   // Scene CRUD
   addScene: (afterIndex?: number) => void;
   addNodeAt: (kind: WorkflowNodeKind, position: { x: number; y: number }, sceneId?: string) => string;
@@ -351,6 +383,17 @@ export const useWorkflowStore = create<WorkflowState>()(
     workflowConnections: [],
     layoutProjectId: null,
     isGeneratingAll: false,
+    selectedNodeContext: null,
+    setSelectedNodeContext: (context) => {
+      set((s) => {
+        s.selectedNodeContext = context;
+      });
+    },
+    clearSelectedNodeContext: () => {
+      set((s) => {
+        s.selectedNodeContext = null;
+      });
+    },
 
     addScene: (afterIndex) => {
       const scenes = get().getScenes();
@@ -1332,6 +1375,6 @@ export const useWorkflowStore = create<WorkflowState>()(
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
     flushPersistStoryboard(() => useWorkflowStore.getState());
-    persistLayout(() => useWorkflowStore.getState());
+    flushPersistLayout();
   });
 }
