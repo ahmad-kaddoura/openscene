@@ -54,17 +54,19 @@ export function ModernDashboard({ onToggleClassic }: ModernDashboardProps) {
       {projectRailOpen && (
         <>
           <ResizablePanel
+            id="workspace-rail"
+            order={1}
             defaultSize={20}
             minSize={14}
             maxSize={32}
-            className="min-w-[224px] max-w-[420px]"
+            className="min-w-0"
           >
-            <ModernSubSidebar onClose={() => setProjectRailOpen(false)} />
+            <ModernSubSidebar onToggle={() => setProjectRailOpen(false)} />
           </ResizablePanel>
-          <ResizableHandle withHandle className="bg-slate-200 hover:bg-cyan-300" />
+          <ResizableHandle id="workspace-rail-resize" className="bg-slate-200" />
         </>
       )}
-      <ResizablePanel defaultSize={projectRailOpen ? 80 : 100} minSize={50}>
+      <ResizablePanel id="workspace-main" order={2} defaultSize={projectRailOpen ? 80 : 100} minSize={50}>
         <ModernMainContent
           projectRailOpen={projectRailOpen}
           onToggleProjectRail={() => setProjectRailOpen((value) => !value)}

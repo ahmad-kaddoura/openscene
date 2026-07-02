@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useProjectStore } from "@/features/project/store";
 
-export function ModernSubSidebar({ onClose }: { onClose?: () => void }) {
+export function ModernSubSidebar({ onToggle }: { onToggle?: () => void }) {
   const { projects, currentProjectId, createProject, openProject, getCurrentProject } = useProjectStore();
   const currentProject = getCurrentProject();
   const [checklistOpen, setChecklistOpen] = useState(true);
@@ -46,24 +46,26 @@ export function ModernSubSidebar({ onClose }: { onClose?: () => void }) {
 
   return (
     <div className="z-10 flex h-full w-full shrink-0 flex-col border-r border-slate-200 bg-white">
-      <div className="flex items-center justify-between gap-3 p-4">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-950">Workspace</h2>
-          <p className="text-xs text-slate-500">Projects and review flow</p>
+      <div className="p-4">
+        <div className="flex items-start gap-2">
+          {onToggle && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="mt-0.5 h-8 w-8 rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-950"
+              onClick={onToggle}
+              aria-label="Hide workspace panel"
+              title="Hide workspace panel"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </Button>
+          )}
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-slate-950">Workspace</h2>
+            <p className="text-xs text-slate-500">Projects and review flow</p>
+          </div>
         </div>
-        {onClose && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-950"
-            onClick={onClose}
-            aria-label="Hide workspace panel"
-            title="Hide workspace panel"
-          >
-            <PanelLeftClose className="h-4 w-4" />
-          </Button>
-        )}
       </div>
 
       <div className="px-4 pb-4">

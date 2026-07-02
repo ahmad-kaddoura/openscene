@@ -418,7 +418,7 @@ function AgentWorkspace({
 }) {
   const setPhase = useProjectStore((s) => s.setPhase);
   const progress = projectProgress(project);
-  const [chatOpen, setChatOpen] = useState(true);
+  const chatOpen = true;
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const contentMode = project.currentPhase === "workflow" || project.currentPhase === "timeline";
 
@@ -426,28 +426,18 @@ function AgentWorkspace({
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-slate-50">
       <div className="flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white/92 px-4 py-3 backdrop-blur">
         <div className="flex min-w-0 items-center gap-2">
-          {onToggleProjectRail && (
+          {onToggleProjectRail && !projectRailOpen && (
             <Button
               variant="ghost"
               size="icon"
-              className="h-9 w-9 rounded-full text-slate-600"
+              className="h-9 w-9 rounded-full text-slate-600 hover:bg-slate-100"
               onClick={onToggleProjectRail}
-              aria-label={projectRailOpen ? "Hide project panel" : "Show project panel"}
-              title={projectRailOpen ? "Hide project panel" : "Show project panel"}
+              aria-label="Show workspace panel"
+              title="Show workspace panel"
             >
-              {projectRailOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+              <PanelLeftOpen className="h-4 w-4" />
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 rounded-full text-slate-600"
-            onClick={() => setChatOpen((value) => !value)}
-            aria-label={chatOpen ? "Hide planning panel" : "Show planning panel"}
-            title={chatOpen ? "Hide planning panel" : "Show planning panel"}
-          >
-            <MessageSquareText className="h-4 w-4" />
-          </Button>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="truncate text-base font-semibold text-slate-950 md:text-lg">{project.name}</h1>
@@ -477,17 +467,19 @@ function AgentWorkspace({
         {chatOpen && (
           <>
             <ResizablePanel
+              id="agent-chat"
+              order={1}
               defaultSize={28}
               minSize={18}
               maxSize={46}
-              className="min-w-[300px] max-w-[620px] border-r border-slate-200 bg-white"
+              className="min-w-0 border-r border-slate-200 bg-white"
             >
               <ChatView />
             </ResizablePanel>
-            <ResizableHandle withHandle className="bg-slate-200 hover:bg-cyan-300" />
+            <ResizableHandle id="agent-chat-resize" className="bg-slate-200" />
           </>
         )}
-        <ResizablePanel defaultSize={inspectorOpen ? (chatOpen ? 50 : 78) : chatOpen ? 72 : 100} minSize={34}>
+        <ResizablePanel id="agent-stage" order={2} defaultSize={inspectorOpen ? (chatOpen ? 50 : 78) : chatOpen ? 72 : 100} minSize={34}>
           <main className="h-full min-w-0 overflow-hidden bg-white">
             {project.currentPhase === "workflow" ? (
               <WorkflowView />
@@ -500,12 +492,14 @@ function AgentWorkspace({
         </ResizablePanel>
         {inspectorOpen && (
           <>
-            <ResizableHandle withHandle className="bg-slate-200 hover:bg-cyan-300" />
+            <ResizableHandle id="agent-inspector-resize" className="bg-slate-200" />
             <ResizablePanel
+              id="agent-inspector"
+              order={3}
               defaultSize={22}
               minSize={16}
               maxSize={36}
-              className="min-w-[280px] max-w-[520px] border-l border-slate-200 bg-white"
+              className="min-w-0 border-l border-slate-200 bg-white"
             >
               <WorkspaceInspector project={project} progress={progress} />
             </ResizablePanel>

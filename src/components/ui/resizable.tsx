@@ -39,13 +39,13 @@ function ResizableHandle({
     <ResizablePrimitive.PanelResizeHandle
       data-slot="resizable-handle"
       className={cn(
-        "bg-border focus-visible:ring-ring relative flex w-px items-center justify-center after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2 focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:outline-hidden data-[panel-group-direction=vertical]:h-px data-[panel-group-direction=vertical]:w-full data-[panel-group-direction=vertical]:after:left-0 data-[panel-group-direction=vertical]:after:h-1 data-[panel-group-direction=vertical]:after:w-full data-[panel-group-direction=vertical]:after:translate-x-0 data-[panel-group-direction=vertical]:after:-translate-y-1/2 [&[data-panel-group-direction=vertical]>div]:rotate-90",
+        "group bg-border focus-visible:ring-ring relative flex w-1 shrink-0 touch-none select-none items-center justify-center outline-none transition-colors after:absolute after:inset-y-0 after:left-1/2 after:w-5 after:-translate-x-1/2 hover:bg-cyan-300 focus-visible:ring-1 focus-visible:ring-offset-1 data-[resize-handle-state=drag]:bg-cyan-400 data-[panel-group-direction=horizontal]:cursor-col-resize data-[panel-group-direction=vertical]:h-1 data-[panel-group-direction=vertical]:w-full data-[panel-group-direction=vertical]:cursor-row-resize data-[panel-group-direction=vertical]:after:left-0 data-[panel-group-direction=vertical]:after:top-1/2 data-[panel-group-direction=vertical]:after:h-5 data-[panel-group-direction=vertical]:after:w-full data-[panel-group-direction=vertical]:after:-translate-y-1/2 data-[panel-group-direction=vertical]:after:translate-x-0 [&[data-panel-group-direction=vertical]>div]:rotate-90",
         className
       )}
       {...props}
     >
       {withHandle && (
-        <div className="z-30 flex h-9 w-4 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-cyan-300 hover:text-cyan-700">
+        <div className="z-30 flex h-9 w-4 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors group-data-[resize-handle-state=drag]:border-cyan-300 group-data-[resize-handle-state=drag]:text-cyan-700">
           <GripVerticalIcon className="size-3" />
         </div>
       )}
