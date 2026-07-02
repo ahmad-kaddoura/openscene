@@ -73,6 +73,7 @@ export function ChatView() {
   const promptOverrides = useSettingsStore((s) => s.settings.promptOverrides);
   const [input, setInput] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const [attachmentErrors, setAttachmentErrors] = useState<string[]>([]);
   const [configOpen, setConfigOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -111,6 +112,7 @@ export function ChatView() {
     isSendingRef.current = true;
     setInput('');
     setPendingAttachments([]);
+    setAttachmentErrors([]);
     setStreaming(true);
 
     const outgoingMessages = [...messages, { role: 'user' as const, content }];
@@ -311,17 +313,34 @@ export function ChatView() {
 
   const handleAttachImages = (files: FileList | null) => {
     if (!files?.length) return;
+    const errors: string[] = [];
     Array.from(files).slice(0, 4).forEach((file) => {
-      if (!file.type.startsWith('image/') || file.size > 4 * 1024 * 1024) return;
+      if (!file.type.startsWith('image/')) {
+        errors.push(`${file.name} is not an image.`);
+        return;
+      }
+      if (file.size > 4 * 1024 * 1024) {
+        errors.push(`${file.name} is larger than 4MB.`);
+        return;
+      }
       const reader = new FileReader();
       reader.onload = () => {
         setPendingAttachments((prev) => [
           ...prev,
-          { type: 'image', url: reader.result as string, name: file.name },
-        ]);
+          { type: 'image' as const, url: reader.result as string, name: file.name },
+        ].slice(0, 4));
+      };
+      reader.onerror = () => {
+        setAttachmentErrors((prev) => [`Could not read ${file.name}. Try another image.`, ...prev].slice(0, 3));
       };
       reader.readAsDataURL(file);
     });
+    if (files.length > 4) {
+      errors.push('Only the first 4 reference images were added.');
+    }
+    if (errors.length) {
+      setAttachmentErrors((prev) => [...errors, ...prev].slice(0, 3));
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -572,7 +591,7 @@ export function ChatView() {
       <div className="border-t border-border p-4 shrink-0">
         <div className="max-w-3xl mx-auto space-y-2">
           {pendingAttachments.length > 0 && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 rounded-xl border border-cyan-200 bg-cyan-50/60 p-2">
               {pendingAttachments.map((att, i) => (
                 <div key={i} className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
                   <img src={att.url} alt={att.name} className="w-full h-full object-cover" />
@@ -582,6 +601,26 @@ export function ChatView() {
                     onClick={() => setPendingAttachments((prev) => prev.filter((_, j) => j !== i))}
                   >
                     <X className="w-3 h-3 text-white" />
+                  </button>
+                </div>
+              ))}
+              <div className="flex min-h-14 flex-1 items-center text-xs leading-5 text-cyan-800">
+                {pendingAttachments.length} reference image{pendingAttachments.length === 1 ? '' : 's'} ready. They will be saved to this project and sent with the next generation request.
+              </div>
+            </div>
+          )}
+
+          {attachmentErrors.length > 0 && (
+            <div className="space-y-1">
+              {attachmentErrors.map((error) => (
+                <div key={error} className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <span>{error}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttachmentErrors((prev) => prev.filter((item) => item !== error))}
+                    aria-label="Dismiss attachment error"
+                  >
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
               ))}

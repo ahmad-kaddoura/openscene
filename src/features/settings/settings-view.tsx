@@ -13,14 +13,14 @@ import { AppearanceTab } from '@/features/settings/appearance-tab';
 export function SettingsView() {
   return (
     <ScrollArea className="h-full">
-      <div className="max-w-4xl mx-auto p-6 space-y-6">
+      <div className="mx-auto max-w-6xl space-y-6 p-6">
         <div>
           <h2 className="text-xl font-bold">Settings</h2>
           <p className="text-sm text-muted-foreground">Configure your OpenScene experience</p>
         </div>
 
         <Tabs defaultValue="api-keys" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="grid h-auto w-full grid-cols-2 gap-1 md:grid-cols-3 xl:grid-cols-6">
             <TabsTrigger value="api-keys" className="gap-1.5 text-xs">
               <KeyRound className="w-3.5 h-3.5" /> API Keys
             </TabsTrigger>
